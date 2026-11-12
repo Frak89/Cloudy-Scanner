@@ -148,7 +148,7 @@ class PhotoRecon(private val ctx: Context, private val map: PointMap) {
         }
         val p1 = MatOfPoint2f(); p1.fromList(l1); val p2 = MatOfPoint2f(); p2.fromList(l2)
         val k = kMat(va); val mask = Mat()
-        val e = Calib3d.findEssentialMat(p1, p2, k, Calib3d.RANSAC, 0.999, 1.5, mask)
+        val e = Calib3d.findEssentialMat(p1, p2, k, Calib3d.RANSAC, 0.999, 1.5, 1000, mask)
         if (e.empty() || e.rows() != 3) return false
         val r = Mat(); val t = Mat()
         val good = Calib3d.recoverPose(e, p1, p2, k, r, t, mask)
