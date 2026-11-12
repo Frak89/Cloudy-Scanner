@@ -378,30 +378,38 @@ class Fusion(private val map: PointMap) {
     private var cellU = IntArray(4096)
     private var cellAll = IntArray(4096)
     private var cellSum = FloatArray(4096 * 3)
+    private var pointCell = IntArray(0)
+
+    private fun cellScore(c: Int, camX: Float, camY: Float, camZ: Float, reach: Float): Float {
+        val u = cellU[c]
+        if (u < 30 || u < cellAll[c] * 0.45f) return 0f
+        val iu = 1f / u
+        val dx = cellSum[c * 3] * iu - camX; val dy = cellSum[c * 3 + 1] * iu - camY; val dz = cellSum[c * 3 + 2] * iu - camZ
+        val d = sqrt(dx * dx + dy * dy + dz * dz)
+        // Only places close enough to rescan properly; the far background is always sparse.
+        return if (d > reach) 0f else u / (0.5f + d)
+    }
 
     /**
-     * Flags weakly observed points and picks the densest nearby patch of them as the place
-     * the user should scan again. Caller holds the map lock.
+     * Finds weakly observed patches and picks the best one as the place the user should scan
+     * again. A point counts when it has low confidence, is no longer being observed (what is in
+     * view right now is still settling) and is near enough to be worth a second pass. Only
+     * points in a patch that is mostly weak are highlighted: lone weak points are just noise.
+     * Caller holds the map lock.
      */
     private fun analyseUncertainty(camX: Float, camY: Float, camZ: Float, frame: Int, now: Long) {
         cellIdx.clear()
         var nc = 0
-        var total = 0
         val inv = 1f / GUIDE_CELL
         val n = map.size
-        val unc = PointMap.UNCERTAIN.toInt()
         val reach = min(2.5f, Opt.maxRange * 0.6f)
-        val flagReach2 = (reach * 1.25f) * (reach * 1.25f)
+        val weakReach2 = (reach * 1.25f) * (reach * 1.25f)
+        if (pointCell.size < n) pointCell = IntArray(n + n / 2)
         for (i in 0 until n) {
             val o = i * 3
             val x = map.pos[o]; val y = map.pos[o + 1]; val z = map.pos[o + 2]
-            // Weak, no longer being observed (what is in view right now is still settling), and
-            // close enough to be worth a second pass: the far background is always sparse.
-            val isU = map.conf[i] < UNCERTAIN_BELOW && map.seen[i] < frame - 12 &&
-                (x - camX) * (x - camX) + (y - camY) * (y - camY) + (z - camZ) * (z - camZ) < flagReach2
-            val f = map.flags[i].toInt()
-            map.flags[i] = (if (isU) f or unc else f and unc.inv()).toByte()
-            if (isU) total++
+            val weak = map.conf[i] < UNCERTAIN_BELOW && map.seen[i] < frame - 12 &&
+                (x - camX) * (x - camX) + (y - camY) * (y - camY) + (z - camZ) * (z - camZ) < weakReach2
             val k = LongIntMap.pack(floor(x * inv).toInt(), floor(y * inv).toInt(), floor(z * inv).toInt())
             var c = cellIdx.get(k)
             if (c < 0) {
@@ -414,46 +422,55 @@ class Fusion(private val map: PointMap) {
                 cellSum[c * 3] = 0f; cellSum[c * 3 + 1] = 0f; cellSum[c * 3 + 2] = 0f
             }
             cellAll[c]++
-            if (isU) { cellU[c]++; cellSum[c * 3] += x; cellSum[c * 3 + 1] += y; cellSum[c * 3 + 2] += z }
+            if (weak) { cellU[c]++; cellSum[c * 3] += x; cellSum[c * 3 + 1] += y; cellSum[c * 3 + 2] += z }
+            pointCell[i] = if (weak) c else -1
+        }
+        // Highlight weak points only where they dominate their patch.
+        val unc = PointMap.UNCERTAIN.toInt()
+        var total = 0
+        for (i in 0 until n) {
+            val c = pointCell[i]
+            val on = c >= 0 && cellU[c] >= 20 && cellU[c] >= cellAll[c] * 0.35f
+            val f = map.flags[i].toInt()
+            map.flags[i] = (if (on) f or unc else f and unc.inv()).toByte()
+            if (on) total++
         }
         map.touch()
         uncertainCount = total
 
         val g = guidance
+        var curScore = 0f
         if (g.active) {
             val c = cellIdx.get(guideKey)
-            val dx = g.x - camX; val dy = g.y - camY; val dz = g.z - camZ
-            val far = dx * dx + dy * dy + dz * dz > (reach * 1.25f) * (reach * 1.25f)
             when {
                 c < 0 -> g.active = false
                 cellU[c] < 10 || cellU[c] <= cellAll[c] * 0.2f -> { g.active = false; g.resolved++ }
-                // Ignored for a while, or the user walked away: stop nagging about this spot.
-                far || now - guideSinceNs > 20_000_000_000L -> { g.active = false; skipCells[guideKey] = now + 30_000_000_000L }
-                else -> { g.count = cellU[c]; val iu = 1f / cellU[c]; g.x = cellSum[c * 3] * iu; g.y = cellSum[c * 3 + 1] * iu; g.z = cellSum[c * 3 + 2] * iu }
+                // Ignored for a while: stop nagging about this spot.
+                now - guideSinceNs > 20_000_000_000L -> { g.active = false; skipCells[guideKey] = now + 30_000_000_000L }
+                else -> {
+                    g.count = cellU[c]; val iu = 1f / cellU[c]
+                    g.x = cellSum[c * 3] * iu; g.y = cellSum[c * 3 + 1] * iu; g.z = cellSum[c * 3 + 2] * iu
+                    curScore = cellScore(c, camX, camY, camZ, reach)
+                    // Out of reach now (the user walked on): let a nearer spot take over at once.
+                    if (curScore == 0f) g.active = false
+                }
             }
         }
-        if (!g.active) {
-            var best = -1; var bestScore = 0f
-            for (c in 0 until nc) {
-                val u = cellU[c]
-                if (u < 30 || u < cellAll[c] * 0.45f) continue
-                val exp = skipCells[cellKey[c]]
-                if (exp != null) { if (exp > now) continue else skipCells.remove(cellKey[c]) }
-                val iu = 1f / u
-                val dx = cellSum[c * 3] * iu - camX; val dy = cellSum[c * 3 + 1] * iu - camY; val dz = cellSum[c * 3 + 2] * iu - camZ
-                val d = sqrt(dx * dx + dy * dy + dz * dz)
-                // Only places close enough to rescan properly; the far background is always sparse.
-                if (d > reach) continue
-                val score = u / (0.5f + d)
-                if (score > bestScore) { bestScore = score; best = c }
-            }
-            if (best >= 0) {
-                val iu = 1f / cellU[best]
-                g.x = cellSum[best * 3] * iu; g.y = cellSum[best * 3 + 1] * iu; g.z = cellSum[best * 3 + 2] * iu
-                g.count = cellU[best]
-                guideKey = cellKey[best]; guideSinceNs = now
-                g.active = true
-            }
+        var best = -1; var bestScore = 0f
+        for (c in 0 until nc) {
+            val sc = cellScore(c, camX, camY, camZ, reach)
+            if (sc <= bestScore) continue
+            val exp = skipCells[cellKey[c]]
+            if (exp != null) { if (exp > now) continue else skipCells.remove(cellKey[c]) }
+            bestScore = sc; best = c
+        }
+        // Keep the current target unless a clearly better one shows up (avoids flip-flopping).
+        if (best >= 0 && (!g.active || (cellKey[best] != guideKey && bestScore > 2f * curScore))) {
+            val iu = 1f / cellU[best]
+            g.x = cellSum[best * 3] * iu; g.y = cellSum[best * 3 + 1] * iu; g.z = cellSum[best * 3 + 2] * iu
+            g.count = cellU[best]
+            guideKey = cellKey[best]; guideSinceNs = now
+            g.active = true
         }
     }
 
