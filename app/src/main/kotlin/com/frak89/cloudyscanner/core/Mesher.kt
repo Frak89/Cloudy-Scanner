@@ -5,12 +5,18 @@ import kotlin.math.max
 import kotlin.math.sqrt
 
 /** Quad-dominant surface mesh. Triangles are derived by splitting each quad in two. */
+/** A named part of a mesh (one object in Blender): a run of faces and of n-gons. */
+class MeshGroup(val name: String, val faceStart: Int, val faceEnd: Int, val ngonStart: Int, val ngonEnd: Int)
+
 class MeshData(
     val pos: FloatArray,
     val nrm: FloatArray,
     val col: IntArray,
     val quads: IntArray,
     val cell: Float,
+    /** Flat faces with more than four sides (the end caps of round solids), as vertex loops. */
+    val ngons: List<IntArray> = emptyList(),
+    val groups: List<MeshGroup> = emptyList(),
 ) {
     /** Faces stored in [quads]; a face whose last two indices are equal is a lone triangle. */
     val faceCount get() = quads.size / 4
@@ -24,8 +30,12 @@ class MeshData(
         var q = 0
         for (f in 0 until quads.size / 4) if (quads[f * 4 + 2] != quads[f * 4 + 3]) q++
         quadCount = q
-        triangleCount = q * 2 + (quads.size / 4 - q)
+        var t = q * 2 + (quads.size / 4 - q)
+        for (g in ngons) t += g.size - 2
+        triangleCount = t
     }
+
+    val ngonCount get() = ngons.size
 
     fun triangleIndices(): IntArray {
         val t = IntArray(triangleCount * 3)
@@ -35,6 +45,7 @@ class MeshData(
             t[o] = a; t[o + 1] = b; t[o + 2] = c; o += 3
             if (c != d) { t[o] = a; t[o + 1] = c; t[o + 2] = d; o += 3 }
         }
+        for (g in ngons) for (k in 1 until g.size - 1) { t[o] = g[0]; t[o + 1] = g[k]; t[o + 2] = g[k + 1]; o += 3 }
         return t
     }
 
@@ -48,7 +59,14 @@ class MeshData(
             t[o] = a; t[o + 1] = b; t[o + 2] = b; t[o + 3] = c; t[o + 4] = c; t[o + 5] = d; t[o + 6] = d; t[o + 7] = a
             if (diagonals) { t[o + 8] = a; t[o + 9] = c }
         }
-        return t
+        if (ngons.isEmpty()) return t
+        // N-gon outlines (plus the fan edges when triangles are shown) follow the regular faces.
+        val extra = ArrayList<Int>()
+        for (g in ngons) {
+            for (k in g.indices) { extra.add(g[k]); extra.add(g[(k + 1) % g.size]) }
+            if (diagonals) for (k in 2 until g.size - 1) { extra.add(g[0]); extra.add(g[k]) }
+        }
+        return t + extra.toIntArray()
     }
 }
 

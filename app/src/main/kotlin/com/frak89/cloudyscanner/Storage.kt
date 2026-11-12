@@ -79,7 +79,7 @@ object Storage {
     fun exportObj(ctx: Context, m: MeshData, asQuads: Boolean): File {
         val f = File(appDir(ctx), "mesh_${stamp()}_${if (asQuads) "quads" else "tris"}.obj")
         f.bufferedWriter().use { w ->
-            w.write("# Cloudy Scanner - ${m.vertexCount} vertices, ${m.quadCount} quads, ${m.triangleCount} triangles\n")
+            w.write("# Cloudy Scanner - ${m.vertexCount} vertices, ${m.quadCount} quads, ${m.ngonCount} n-gons, ${m.triangleCount} triangles\n")
             for (v in 0 until m.vertexCount) {
                 val c = m.col[v]
                 w.write(String.format(Locale.US, "v %.5f %.5f %.5f %.3f %.3f %.3f\n",
@@ -89,11 +89,25 @@ object Storage {
             for (v in 0 until m.vertexCount) {
                 w.write(String.format(Locale.US, "vn %.4f %.4f %.4f\n", m.nrm[v * 3], m.nrm[v * 3 + 1], m.nrm[v * 3 + 2]))
             }
-            for (q in 0 until m.faceCount) {
+            fun face(q: Int) {
                 val a = m.quads[q * 4] + 1; val b = m.quads[q * 4 + 1] + 1; val c = m.quads[q * 4 + 2] + 1; val d = m.quads[q * 4 + 3] + 1
                 if (c == d) w.write("f $a//$a $b//$b $c//$c\n")
                 else if (asQuads) w.write("f $a//$a $b//$b $c//$c $d//$d\n")
                 else w.write("f $a//$a $b//$b $c//$c\nf $a//$a $c//$c $d//$d\n")
+            }
+            fun ngon(g: IntArray) {
+                // Kept as one N-sided face (Blender reads it as such); split into a fan for triangle export.
+                if (asQuads) w.write("f " + g.joinToString(" ") { "${it + 1}//${it + 1}" } + "\n")
+                else for (k in 1 until g.size - 1) w.write("f ${g[0] + 1}//${g[0] + 1} ${g[k] + 1}//${g[k] + 1} ${g[k + 1] + 1}//${g[k + 1] + 1}\n")
+            }
+            if (m.groups.isEmpty()) {
+                for (q in 0 until m.faceCount) face(q)
+                for (g in m.ngons) ngon(g)
+            } else for (gr in m.groups) {
+                // One named object per solid, flat-shaded.
+                w.write("o ${gr.name}\ns off\n")
+                for (q in gr.faceStart until gr.faceEnd) face(q)
+                for (k in gr.ngonStart until gr.ngonEnd) ngon(m.ngons[k])
             }
         }
         return f

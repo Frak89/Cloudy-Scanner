@@ -57,7 +57,7 @@ class MeshGpu(mesh: MeshData) {
         val order = (0 until nf).sortedBy { mesh.pos[mesh.quads[it * 4] * 3 + 1] }
         val sorted = IntArray(nf * 4)
         for ((i, f) in order.withIndex()) System.arraycopy(mesh.quads, f * 4, sorted, i * 4, 4)
-        val m = MeshData(mesh.pos, mesh.nrm, mesh.col, sorted, mesh.cell)
+        val m = MeshData(mesh.pos, mesh.nrm, mesh.col, sorted, mesh.cell, mesh.ngons)
         tris = direct(m.triangleIndices())
         wireQuads = direct(m.wireIndices(false))
         wireTris = direct(m.wireIndices(true))
@@ -89,6 +89,8 @@ class SceneRenderer(
     /** When set, points are drawn in this reduced palette (256-colour view). */
     @Volatile var palette: com.frak89.cloudyscanner.core.Palette? = null
     @Volatile var paletteSubjectOnly = false
+    /** Clean models have hard edges: shade every face flat whatever the option says. */
+    @Volatile var forceFlat = false
 
     private var bgProg = 0; private var ptProg = 0; private var meshProg = 0; private var lineProg = 0
     private var camTex = 0
@@ -380,7 +382,7 @@ class SceneRenderer(
             GLES30.glUniform4f(u(meshProg, "uColor"), 0.72f, 0.74f, 0.8f, if (xray) 0.35f else 1f)
             GLES30.glUniform1i(u(meshProg, "uUseVertexColor"), if (Opt.vertexColor) 1 else 0)
             GLES30.glUniform1i(u(meshProg, "uLit"), if (Opt.lit) 1 else 0)
-            GLES30.glUniform1i(u(meshProg, "uFlat"), if (Opt.flat) 1 else 0)
+            GLES30.glUniform1i(u(meshProg, "uFlat"), if (Opt.flat || forceFlat) 1 else 0)
             GLES30.glUniform1i(u(meshProg, "uDiscardBack"), 0)
             GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, triIbo)
             val n = ((triCount / 3) * frac).toInt() * 3
@@ -396,14 +398,14 @@ class SceneRenderer(
             GLES30.glUniform1i(u(meshProg, "uUseVertexColor"), 0)
             GLES30.glUniform1i(u(meshProg, "uLit"), 0)
             GLES30.glUniform1i(u(meshProg, "uFlat"), 0)
-            GLES30.glUniform1i(u(meshProg, "uDiscardBack"), if (Opt.cull) 1 else 0)
+            GLES30.glUniform1i(u(meshProg, "uDiscardBack"), if (Opt.cull && !forceFlat) 1 else 0)
             GLES30.glLineWidth(1.5f)
             if (xray) GLES30.glDisable(GLES30.GL_DEPTH_TEST)
             val quads = Opt.wireQuads
             GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, if (quads) wqIbo else wtIbo)
             val per = if (quads) 8 else 10
             val total = if (quads) wqCount else wtCount
-            val n = ((total / per) * frac).toInt() * per
+            val n = if (frac >= 1f) total else ((total / per) * frac).toInt() * per
             if (n > 0) GLES30.glDrawElements(GLES30.GL_LINES, n, GLES30.GL_UNSIGNED_INT, 0)
             if (xray) GLES30.glEnable(GLES30.GL_DEPTH_TEST)
         }

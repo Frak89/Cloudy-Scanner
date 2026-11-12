@@ -80,9 +80,11 @@ class NurbsSurface(
          * Tube with an exact circular section from [p0] to [p1]; radius may differ at the two
          * ends (a cone). The outside is the front side.
          */
-        fun tube(name: String, p0: DoubleArray, p1: DoubleArray, r0: Double, r1: Double, color: Int): NurbsSurface {
-            val d = doubleArrayOf(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2])
-            val len = norm(d); d[0] /= len; d[1] /= len; d[2] /= len
+        fun tube(name: String, p0: DoubleArray, p1: DoubleArray, r0: Double, r1: Double, color: Int, axis: DoubleArray? = null): NurbsSurface {
+            // [axis] must be given when p0 == p1 (a flat ring between two radii).
+            val d = axis?.copyOf() ?: doubleArrayOf(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2])
+            val dl = norm(d); d[0] /= dl; d[1] /= dl; d[2] /= dl
+            val len = norm(doubleArrayOf(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]))
             val (e1, e2) = frame(d)
             val c = DoubleArray(9 * 2 * 4)
             for (j in 0 until 2) {

@@ -51,6 +51,15 @@ object Opt {
     /** 0 low, 1 mid, 2 high, 3 NURBS (regular shapes) */
     @Volatile var meshLevel = 1
     @Volatile var smoothIters = 1
+    /** Rebuild as few exact solids (clean low/mid/high-poly modelling) instead of a dense scanned skin. */
+    @Volatile var smart = true
+    /** Sides of circles in clean models; 0 = chosen from level and size. */
+    @Volatile var circleSides = 0
+    @Volatile var bevel = true
+    /** Keep irregular parts as ordinary mesh next to the clean solids. */
+    @Volatile var keepDetails = true
+    /** What the AI says the object is; steers typical finishing (e.g. the rim of a can). */
+    @Volatile var objectHint = ""
 
     // Erase
     @Volatile var eraseMode = false

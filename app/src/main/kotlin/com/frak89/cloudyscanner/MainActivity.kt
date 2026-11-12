@@ -403,6 +403,13 @@ class MainActivity : Activity(), Director.Ui {
 
         header(col, "Ricostruzione")
         choice(col, arrayOf("Low", "Mid", "High", "NURBS"), { Opt.meshLevel }) { rebuild(it) }
+        sw(col, "Modello pulito (solidi semplici)", { Opt.smart }) { Opt.smart = it; rebuildIfShown() }
+        col.addView(TextView(this).apply { text = "Lati dei cerchi"; setTextColor(MUTED); textSize = 12f; setPadding(0, dp(6f), 0, 0) })
+        val sideValues = intArrayOf(0, 6, 8, 12, 16, 24, 32)
+        choice(col, arrayOf("Auto", "6", "8", "12"), { sideValues.indexOf(Opt.circleSides).let { if (it in 0..3) it else -1 } }) { Opt.circleSides = sideValues[it]; refreshControls(); rebuildIfShown() }
+        choice(col, arrayOf("16", "24", "32"), { sideValues.indexOf(Opt.circleSides).let { if (it >= 4) it - 4 else -1 } }) { Opt.circleSides = sideValues[it + 4]; refreshControls(); rebuildIfShown() }
+        sw(col, "Smussi sui bordi tondi", { Opt.bevel }) { Opt.bevel = it; rebuildIfShown() }
+        sw(col, "Tieni i dettagli irregolari come mesh", { Opt.keepDetails }) { Opt.keepDetails = it; rebuildIfShown() }
         slider(col, "Smoothing", 0f, 3f, { Opt.smoothIters.toFloat() }, { "${Math.round(it)}×" }) { Opt.smoothIters = Math.round(it) }
         sw(col, "Ricostruzione in tempo reale", { Opt.realtimeMesh }) { Opt.realtimeMesh = it }
 
@@ -510,6 +517,11 @@ class MainActivity : Activity(), Director.Ui {
         remeshIfAny()
     }
 
+    /** Options of the clean model changed: redo the mesh that is on screen. */
+    private fun rebuildIfShown() {
+        if (meshes.mesh != null && meshes.level in 0..2 && map.size >= 100) meshes.request(meshes.level, Opt.smoothIters, 0, 0.6f) { ui.post { refreshControls() } }
+    }
+
     private fun remeshIfAny() {
         if (meshes.mesh != null && meshes.level >= 0) meshes.request(meshes.level, Opt.smoothIters, 0, 0f)
     }
@@ -522,7 +534,11 @@ class MainActivity : Activity(), Director.Ui {
                 if (level == Opt.LEVEL_NURBS) {
                     aiLog.append("\n\nNURBS: " + meshes.nurbsInfo)
                     Toast.makeText(this, "NURBS: " + meshes.nurbsInfo, Toast.LENGTH_LONG).show()
-                } else if (m != null) toast("${Opt.levelName[level]}: ${fmt(m.vertexCount)} vertici · ${fmt(m.quadCount)} quads · ${fmt(m.triangleCount)} triangoli")
+                } else if (m != null) {
+                    val counts = "${fmt(m.vertexCount)} vertici · ${fmt(m.quadCount)} quads" + (if (m.ngonCount > 0) " · ${m.ngonCount} n-goni" else "") + " · ${fmt(m.triangleCount)} triangoli"
+                    if (Opt.smart) { aiLog.append("\n\nModello pulito ${Opt.levelName[level]}: ${meshes.nurbsInfo}\n$counts"); Toast.makeText(this, meshes.nurbsInfo, Toast.LENGTH_LONG).show() }
+                    else toast("${Opt.levelName[level]}: $counts")
+                }
                 refreshControls()
             }
         }
@@ -533,9 +549,9 @@ class MainActivity : Activity(), Director.Ui {
         val pm = PopupMenu(this, anchor)
         val items = arrayOf(
             "Ricostruisci LOW poly", "Ricostruisci MID poly", "Ricostruisci HIGH poly",
-            "Ricostruisci NURBS (tubi, curve, dischi, piani)", "Esporta NURBS in IGES (per CAD)",
+            "Ricostruisci NURBS (tubi, curve, dischi, piani)", "Esporta superfici esatte in IGES (per CAD)",
             if (Opt.realtimeMesh) "Tempo reale: ON → spegni" else "Tempo reale: OFF → accendi",
-            "Rimuovi mesh", "Esporta mesh OBJ (quads)", "Esporta mesh OBJ (triangoli)", "Esporta nuvola PLY", "Nuova scansione (azzera tutto)",
+            "Rimuovi mesh", "Esporta OBJ per Blender (quads e n-goni)", "Esporta OBJ (triangoli)", "Esporta nuvola PLY", "Nuova scansione (azzera tutto)",
         )
         items.forEachIndexed { i, s -> pm.menu.add(0, i, i, s) }
         pm.setOnMenuItemClickListener {
@@ -601,8 +617,8 @@ class MainActivity : Activity(), Director.Ui {
         }
         AlertDialog.Builder(this)
             .setTitle("Ricostruzione 3D da foto")
-            .setMessage("Scegli da 3 a ${PhotoRecon.MAX_PHOTOS} foto dello stesso soggetto, scattate girandogli attorno con molta sovrapposizione " +
-                "(circa 15° tra una e l'altra) e in ordine. La nuvola cresce foto dopo foto.\n\nLa scansione attuale viene sostituita.")
+            .setMessage("Scegli da 3 a ${PhotoRecon.MAX_PHOTOS} foto dello stesso soggetto. Bastano 3 foto se inquadrano le stesse parti " +
+                "spostandoti di lato di un passo tra una e l'altra; con più foto il risultato è più completo.\n\nLa scansione attuale viene sostituita.")
             .setPositiveButton("Scegli le foto") { _, _ ->
                 val i = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                 try { startActivityForResult(i, REQ_PHOTOS) } catch (t: Throwable) { toast("Nessuna app per scegliere le foto") }
@@ -634,6 +650,33 @@ class MainActivity : Activity(), Director.Ui {
                 if (first && map.size > 0) { first = false; ui.post { renderer.recenter() } }
             }
             ui.post { renderer.recenter(); refreshControls() }
+            // Whatever came out, turn it into something usable: a model, and the AI's reading of the photos.
+            if (map.size >= 200) {
+                Opt.showSolid = true; Opt.showWire = true
+                val lvl = Opt.meshLevel.coerceIn(0, 2)
+                val m = meshes.buildBlocking(lvl, 0, 0, 1.5f)
+                if (m != null && m.faceCount + m.ngonCount > 0) say("Modello ${Opt.levelName[lvl]}: " + (if (Opt.smart) meshes.nurbsInfo + " · " else "") + "${fmt(m.vertexCount)} vertici, ${fmt(m.quadCount)} quads.")
+                else say("I punti sono troppo radi per una mesh: resta la nuvola. Con più foto, o più vicine tra loro, migliora.")
+                ui.post { refreshControls() }
+            }
+            val sheet = recon.contactSheet()
+            if (sheet != null && !aiBusy && (ai.state == LocalAi.State.READY || ai.autoSelect())) {
+                aiBusy = true
+                try {
+                    stream(ai.status)
+                    if (ai.ensureLoaded()) {
+                        val p = "L'immagine è un mosaico delle foto importate dall'utente per ricostruire un oggetto in 3D. " +
+                            (if (recon.usedPhotos >= 2) "La ricostruzione ha usato ${recon.usedPhotos} foto e ha prodotto ${map.size} punti." else "La ricostruzione automatica NON è riuscita a collegare le foto: spiega anche perché potrebbe essere successo (poca sovrapposizione, superfici lisce o lucide, sfondo che cambia).") +
+                            " Di' quali altre foto servirebbero."
+                        val text = ai.generate(SYSTEM_OBJECT, p, listOf(sheet), 300) { stream(it) }
+                        stream(null)
+                        say("IA: " + text.trim())
+                        val r = VisionParse.parse(text)
+                        if (r.known) ui.post { onRecognition(r, 0f) }
+                    } else { stream(null); say(ai.status) }
+                } catch (t: Throwable) { stream(null); say("Analisi IA non riuscita: ${t.message ?: t.javaClass.simpleName}") }
+                finally { finished() }
+            } else if (sheet != null && ai.state == LocalAi.State.NONE) say("Con il modello IA caricato (pannello IA → Modello) analizzo anche le foto per dirti che oggetto è e quali scatti mancano.")
         }
         ui.postDelayed({ refreshControls() }, 300)
     }
@@ -649,6 +692,7 @@ class MainActivity : Activity(), Director.Ui {
     private fun onSubjectLocked() {
         photos.clear()
         live.reset()
+        Opt.objectHint = ""
         hud.objLabel = ""
         aiLevelKnown = false
         if (Opt.palette256) rebuildPalette()
@@ -830,6 +874,11 @@ class MainActivity : Activity(), Director.Ui {
         val before = hud.objLabel
         hud.objLabel = if (r.known) "${r.name} · ${r.confidence}%" else ""
         if (r.level >= 0) { aiLevelKnown = true; photos.delete(planner.setLevel(r.level, false)) }
+        if (r.known && r.confidence >= 60 && !r.name.equals(Opt.objectHint, true)) {
+            // AI boost: knowing what the object is lets the clean model add what such objects always have.
+            Opt.objectHint = r.name
+            if (Opt.smart && meshes.mesh != null && meshes.level in 0..2) { say("IA boost: «${r.name}» → rifaccio il modello pulito con le rifiniture tipiche di questo oggetto."); rebuildIfShown() }
+        }
         val nameChanged = !before.startsWith(r.name + " ·")
         if (r.known && nameChanged) {
             say("IA live: vedo «${r.name}» (${r.confidence}%)" + (if (r.level >= 0) ", forma ${PhotoPlanner.LEVEL_NAMES[r.level].lowercase()} → ${planner.slots.size} viste" else "") +
@@ -1007,7 +1056,7 @@ class MainActivity : Activity(), Director.Ui {
             val m = meshes.mesh
             if (meshes.busy) sb.append("Mesh: ricostruzione ${(meshes.progress * 100).toInt()}%")
             else if (m != null) {
-                sb.append("Mesh ${Opt.levelName[meshes.level.coerceIn(0, 3)]}  V ${fmt(m.vertexCount)}  Q ${fmt(m.quadCount)}  T ${fmt(m.triangleCount)}  (${meshes.lastMs.toInt()} ms)")
+                sb.append("Mesh ${Opt.levelName[meshes.level.coerceIn(0, 3)]}  V ${fmt(m.vertexCount)}  Q ${fmt(m.quadCount)}" + (if (m.ngonCount > 0) "  N-goni ${m.ngonCount}" else "") + "  T ${fmt(m.triangleCount)}  (${meshes.lastMs.toInt()} ms)")
                 if (meshes.nurbsInfo.isNotEmpty()) sb.append("\n").append(meshes.nurbsInfo)
             }
             else sb.append("Mesh: —")

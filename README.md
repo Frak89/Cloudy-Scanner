@@ -47,6 +47,25 @@ Tocca l'oggetto nella vista AR per selezionarlo. Da quel momento:
 | Analizza l'oggetto | Ingombro in cm, punti, forma, colori dominanti, viste mancanti; con il modello IA anche nome, materiali e consigli, da un mosaico delle foto migliori. |
 | IA live | Ogni pochi secondi il modello guarda l'inquadratura (ritagliata sull'oggetto), dice cosa vede e, se non è sicuro, chiede cosa mostrargli. |
 
+## Modello pulito: pochi solidi esatti invece di una pelle densa
+
+Con **Modello pulito** attivo (Opzioni → Ricostruzione; è il comportamento predefinito di Low/Mid/High) la scansione
+viene ricostruita come la modellerebbe una persona in Blender:
+
+- tutto ciò che è tondo attorno a un asse (lattina, bottiglia, tavolo rotondo con la sua gamba) diventa **un solido di
+  rotazione**: il raggio è misurato lungo l'asse, ridotto a tratti dritti, coni e gradini, e ruotato con un cerchio a N lati
+  (6, 8, 12, 16, 24, 32 o automatico in base a livello e dimensione). Le estremità piatte sono singoli N-goni;
+- le facce rettangolari diventano **lastre** con lo spessore visto sui bordi (un piano del tavolo = 8 vertici);
+- tubi e curve restano tubi e curve;
+- **allineamenti**: assi e facce entro 7° da verticale, orizzontale, parallelo o perpendicolare vengono resi esatti;
+  spessori quasi uguali (le gambe di un tavolo) diventano uguali; le estremità che arrivano a pochi centimetri da una faccia
+  ci si appoggiano esattamente;
+- **smussi** opzionali sui bordi tondi; se l'IA riconosce una lattina, aggiunge bordo e coperchio incassato tipici
+  (dichiarati come non misurati);
+- il resto può restare come mesh normale ("Tieni i dettagli irregolari"), così non si perde nulla.
+
+L'OBJ esportato ha un oggetto con nome per ogni solido, quads e N-goni, ombreggiatura piatta: si importa in Blender così com'è.
+
 ## Forme regolari in NURBS (Mesh ▾ → Ricostruisci NURBS)
 
 La nuvola (dell'oggetto selezionato, o tutta) viene cercata per forme regolari, che diventano superfici NURBS esatte:
@@ -59,6 +78,10 @@ Il rilevamento è un RANSAC su punti orientati, rifinito ai minimi quadrati. L'e
 FreeCAD, Rhino, Fusion; il file è stato verificato con OpenCascade. Le forme libere restano come nuvola/mesh.
 
 ## Ricostruzione da foto importate (Foto → 3D)
+
+Bastano 3 foto: con poche foto ogni coppia viene provata per scegliere la partenza migliore, e a posizioni note una seconda
+passata aggiunge i dettagli più incerti. Alla fine viene costruito un modello e, se il modello IA è caricato, le foto vengono
+analizzate per dire che oggetto è e quali scatti mancano.
 
 Scegli più foto dello stesso soggetto: l'app trova gli stessi dettagli nelle varie foto (SIFT, OpenCV), calcola da dove è
 stata scattata ciascuna e triangola una nuvola di punti colorata che cresce foto dopo foto. Poi si usa come una scansione:

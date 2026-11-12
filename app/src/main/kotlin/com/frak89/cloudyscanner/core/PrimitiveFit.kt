@@ -10,21 +10,34 @@ import kotlin.math.min
 import kotlin.math.sqrt
 import kotlin.math.tan
 
-class FitPlane(val c: FloatArray, val n: FloatArray, val u: FloatArray, val v: FloatArray,
-               val disc: Boolean, val radius: Float, val hu: Float, val hv: Float, val color: Int, val count: Int)
+class FitPlane(var c: FloatArray, var n: FloatArray, var u: FloatArray, var v: FloatArray,
+               val disc: Boolean, val radius: Float, var hu: Float, var hv: Float, val color: Int, val count: Int)
 
 /** Straight tube: axis point [a] + t * [d], for t in [t0, t1]. */
-class FitTube(val a: FloatArray, val d: FloatArray, var t0: Float, var t1: Float, val r: Float, val color: Int, val count: Int) {
+class FitTube(var a: FloatArray, var d: FloatArray, var t0: Float, var t1: Float, var r: Float, val color: Int, val count: Int) {
     fun end(first: Boolean) = floatArrayOf(a[0] + d[0] * (if (first) t0 else t1), a[1] + d[1] * (if (first) t0 else t1), a[2] + d[2] * (if (first) t0 else t1))
     val length get() = t1 - t0
 }
 
 /** Bend joining two tubes: starts at [start] heading along [tangent], turns by [angle] around [center]. */
 class FitElbow(val start: FloatArray, val tangent: FloatArray, val center: FloatArray, val axis: FloatArray,
-               val angle: Float, val bendRadius: Float, val r: Float, val color: Int)
+               val angle: Float, val bendRadius: Float, val r: Float, val color: Int) {
+    /** The two tubes this bend joins (set by the fit). */
+    var tubeA: FitTube? = null
+    var tubeB: FitTube? = null
+}
 
-class FitResult(val planes: List<FitPlane>, val tubes: List<FitTube>, val elbows: List<FitElbow>, val explained: Int, val total: Int) {
+class FitResult(val planes: MutableList<FitPlane>, val tubes: MutableList<FitTube>, val elbows: List<FitElbow>, val explained: Int, val total: Int) {
+    /** The (thinned) points the fit worked on: positions, unit normals, colours. */
+    var px = FloatArray(0); var py = FloatArray(0); var pz = FloatArray(0)
+    var nx = FloatArray(0); var ny = FloatArray(0); var nz = FloatArray(0)
+    var col = IntArray(0)
+    /** Per point: index of the plane that explains it, [ROUND] for tubes and bends, -1 for none. */
+    var owner = IntArray(0)
+
     val coverage get() = if (total == 0) 0f else explained.toFloat() / total
+
+    companion object { const val ROUND = -2 }
 
     fun surfaces(): List<NurbsSurface> {
         fun dv(a: FloatArray) = doubleArrayOf(a[0].toDouble(), a[1].toDouble(), a[2].toDouble())
@@ -121,6 +134,7 @@ object PrimitiveFit {
         }
         val total = k
         val alive = BooleanArray(total) { true }
+        val owner = IntArray(total) { -1 }
         var aliveCount = total
         val rnd = Random(seed)
         val planes = ArrayList<FitPlane>(); val tubes = ArrayList<FitTube>()
@@ -180,11 +194,11 @@ object PrimitiveFit {
                     val tt = (px[i] - t.a[0]) * t.d[0] + (py[i] - t.a[1]) * t.d[1] + (pz[i] - t.a[2]) * t.d[2]
                     if (tt < t.t0 - 0.01f || tt > t.t1 + 0.01f) continue
                     val rx = px[i] - t.a[0] - t.d[0] * tt; val ry = py[i] - t.a[1] - t.d[1] * tt; val rz = pz[i] - t.a[2] - t.d[2] * tt
-                    if (abs(sqrt(rx * rx + ry * ry + rz * rz) - t.r) < 2.5f * tubeEps(t.r)) { alive[i] = false; aliveCount-- }
+                    if (abs(sqrt(rx * rx + ry * ry + rz * rz) - t.r) < 2.5f * tubeEps(t.r)) { alive[i] = false; aliveCount--; owner[i] = FitResult.ROUND }
                 }
                 tubes.addAll(tube); fails = 0
             } else if (plane != null && planeCount >= minInliers) {
-                for (i in planeIdx!!) if (alive[i]) { alive[i] = false; aliveCount-- }
+                for (i in planeIdx!!) if (alive[i]) { alive[i] = false; aliveCount--; owner[i] = planes.size }
                 planes.add(plane); fails = 0
             } else fails++
         }
@@ -213,10 +227,12 @@ object PrimitiveFit {
                 val cs = (qx * sx + qy * sy + qz * sz) / max(1e-6f, rho * e.bendRadius)
                 val sn = (qx * e.tangent[0] + qy * e.tangent[1] + qz * e.tangent[2]) / max(1e-6f, rho)
                 val ang = atan2(sn, cs)
-                if (ang > -0.1f && ang < e.angle + 0.1f) { alive[i] = false; aliveCount-- }
+                if (ang > -0.1f && ang < e.angle + 0.1f) { alive[i] = false; aliveCount--; owner[i] = FitResult.ROUND }
             }
         }
-        return FitResult(planes, tubes, elbows, total - aliveCount, total)
+        return FitResult(planes, tubes, elbows, total - aliveCount, total).also {
+            it.px = px; it.py = py; it.pz = pz; it.nx = nx; it.ny = ny; it.nz = nz; it.col = col; it.owner = owner
+        }
     }
 
     private fun tubeEps(r: Float) = max(0.005f, min(EPS, 0.4f * r))
@@ -300,17 +316,24 @@ object PrimitiveFit {
         val bin = 0.02f
         val nb = min(600, ((tmax - tmin) / bin).toInt() + 1)
         val lists = Array(nb) { ArrayList<Float>() }
-        val angles = Array(nb) { BooleanArray(12) }
+        val angles = Array(nb) { BooleanArray(36) }
         val tilt = FloatArray(nb)   // how much the normals lean along the axis (0 on a true tube)
+        val align = FloatArray(nb)  // how well the normals point away from the axis (1 on a true tube)
+        val near = IntArray(nb)
         for (q in 0 until m) {
             val i = tmp[q]
             val vx = px[i] - cy[0]; val vy = py[i] - cy[1]; val vz = pz[i] - cy[2]
             val t = vx * d[0] + vy * d[1] + vz * d[2]
             val b = ((t - tmin) / bin).toInt().coerceIn(0, nb - 1)
             val u = vx * e1[0] + vy * e1[1] + vz * e1[2]; val v = vx * e2[0] + vy * e2[1] + vz * e2[2]
-            lists[b].add(sqrt(u * u + v * v))
-            tilt[b] += abs(nx[i] * d[0] + ny[i] * d[1] + nz[i] * d[2])
-            angles[b][(((atan2(v, u) + Math.PI) / (2 * Math.PI) * 12).toInt()).coerceIn(0, 11)] = true
+            val rho = sqrt(u * u + v * v)
+            lists[b].add(rho)
+            if (abs(rho - r0) < 0.5f * r0 + 0.004f) {
+                tilt[b] += abs(nx[i] * d[0] + ny[i] * d[1] + nz[i] * d[2])
+                align[b] += abs((nx[i] * e1[0] + ny[i] * e1[1] + nz[i] * e1[2]) * u + (nx[i] * e2[0] + ny[i] * e2[1] + nz[i] * e2[2]) * v) / max(1e-6f, rho)
+                near[b]++
+            }
+            angles[b][(((atan2(v, u) + Math.PI) / (2 * Math.PI) * 36).toInt()).coerceIn(0, 35)] = true
         }
         // A bin is a ring when the distances to the axis agree with each other.
         val rb = FloatArray(nb) { -1f }
@@ -340,12 +363,18 @@ object PrimitiveFit {
             if (cnt >= 3) {
                 vals.sort()
                 val r = vals[vals.size / 2]
-                val seen = BooleanArray(12); var pts = 0; var lean = 0f
-                for (q in b..e) { pts += lists[q].size; lean += tilt[q]; for (a in 0 until 12) if (angles[q][a]) seen[a] = true }
+                val seen = BooleanArray(36); var pts = 0; var lean = 0f; var radial = 0f; var nn = 0
+                for (q in b..e) { pts += lists[q].size; lean += tilt[q]; radial += align[q]; nn += near[q]; for (a in 0 until 36) if (angles[q][a]) seen[a] = true }
                 val t0 = tmin + b * bin; val t1 = tmin + (e + 1) * bin
                 // A real tube shows at least a quarter of its circumference and is longer than it is thin.
                 // Its surface must also run parallel to the axis (this is what rejects balls and domes).
-                if (seen.count { it } >= 3 && t1 - t0 >= max(0.05f, 1.2f * r) && lean / max(1, pts) < 0.3f) {
+                // (at least ~70 degrees of arc, in 10-degree sectors: a flat strip never shows that much)
+                // Normals must fan out around the axis too: the edge of a slab has the right distances
+                // but its normals only point two ways.
+                // And the points must curve: a flat strip can lie within tolerance of a wide cylinder
+                // that merely touches it, but then it has no depth.
+                if (seen.count { it } >= 7 && t1 - t0 >= max(0.05f, 1.2f * r) && lean / max(1, nn) < 0.3f && radial / max(1, nn) > 0.93f &&
+                    depthOf(px, py, pz, tmp, m, cy, d, e1, e2, t0, t1, r) > 0.05f * r) {
                     out.add(sectionAxis(px, py, pz, tmp, m, cy, d, e1, e2, t0, t1, r, tubeColor(px, py, pz, col, tmp, m, cy, d, t0, t1), pts))
                     count += pts
                 }
@@ -453,6 +482,26 @@ object PrimitiveFit {
             rb += 0.1f * r
         }
         return best
+    }
+
+    /** Thickness (standard deviation along the thinnest direction) of the points on one tube section. */
+    private fun depthOf(px: FloatArray, py: FloatArray, pz: FloatArray, idx: IntArray, m: Int, cy: FloatArray, d: FloatArray,
+                        e1: FloatArray, e2: FloatArray, t0: Float, t1: Float, r: Float): Float {
+        var n = 0; var su = 0.0; var sv = 0.0; var suu = 0.0; var suv = 0.0; var svv = 0.0
+        for (q in 0 until m) {
+            val i = idx[q]
+            val vx = px[i] - cy[0]; val vy = py[i] - cy[1]; val vz = pz[i] - cy[2]
+            val t = vx * d[0] + vy * d[1] + vz * d[2]
+            if (t < t0 || t > t1) continue
+            val u = (vx * e1[0] + vy * e1[1] + vz * e1[2]).toDouble(); val v = (vx * e2[0] + vy * e2[1] + vz * e2[2]).toDouble()
+            if (abs(sqrt(u * u + v * v) - r) > 0.5 * r + 0.004) continue
+            n++; su += u; sv += v; suu += u * u; suv += u * v; svv += v * v
+        }
+        if (n < 10) return 0f
+        val a = suu / n - (su / n) * (su / n); val b = suv / n - (su / n) * (sv / n); val c = svv / n - (sv / n) * (sv / n)
+        // Across the axis the points of a real tube spread in two directions; take the smaller one.
+        val lmin = (a + c) / 2 - sqrt(max(0.0, (a - c) * (a - c) / 4 + b * b))
+        return sqrt(max(0.0, lmin)).toFloat()
     }
 
     private fun tubeColor(px: FloatArray, py: FloatArray, pz: FloatArray, col: IntArray, idx: IntArray, m: Int, cy: FloatArray, d: FloatArray, t0: Float, t1: Float): Int {
@@ -573,7 +622,7 @@ object PrimitiveFit {
         // Round outline?
         val rho = FloatArray(kk) { sqrt((uu[it] - mu) * (uu[it] - mu) + (vv[it] - mv) * (vv[it] - mv)) }
         rho.sort()
-        val rad = rho[(kk * 0.985f).toInt().coerceAtMost(kk - 1)]
+        val rad = rho[(kk * 0.985f).toInt().coerceAtMost(kk - 1)] / 0.9925f   // 98.5% of the points lie within 99.25% of the radius
         val discFill = area / (Math.PI.toFloat() * rad * rad)
         // Rectangular outline along the principal directions.
         var a = 0.0; var b = 0.0; var d = 0.0
@@ -583,11 +632,20 @@ object PrimitiveFit {
         val pu = FloatArray(kk) { (uu[it] - mu) * ca + (vv[it] - mv) * sa }; val pv = FloatArray(kk) { -(uu[it] - mu) * sa + (vv[it] - mv) * ca }
         pu.sort(); pv.sort()
         val lo = (kk * 0.01f).toInt(); val hi = (kk * 0.99f).toInt().coerceAtMost(kk - 1)
-        val u0 = pu[lo]; val u1 = pu[hi]; val v0 = pv[lo]; val v1 = pv[hi]
-        val rectFill = area / max(1e-6f, (u1 - u0) * (v1 - v0))
+        // 1st..99th percentile of an evenly covered side spans 98% of it: stretch back to the full side.
+        val um = (pu[lo] + pu[hi]) / 2; val vm = (pv[lo] + pv[hi]) / 2
+        val u0 = um - (pu[hi] - pu[lo]) / 1.96f; val u1 = um + (pu[hi] - pu[lo]) / 1.96f
+        val v0 = vm - (pv[hi] - pv[lo]) / 1.96f; val v1 = vm + (pv[hi] - pv[lo]) / 1.96f
         if (max(u1 - u0, v1 - v0) < 0.06f) return null
         val color = meanColor(col, keep, kk)
-        val isDisc = discFill > rectFill * 1.05f && discFill > 0.7f && rad > 0.04f
+        // Round or rectangular, from how the points spread (independent of size and density):
+        // a disc has equal spread both ways and (variance sum) * 2 / R^2 = 1; any rectangle gives 2/3.
+        val varU = a / kk; val varV = d / kk
+        val tr = varU + varV
+        val disc2 = sqrt(max(0.0, (varU - varV) * (varU - varV) + 4 * (b / kk) * (b / kk)))
+        val vMin = (tr - disc2) / 2; val vMax = (tr + disc2) / 2
+        val roundness = tr * 2 / max(1e-9, (rad * rad).toDouble())
+        val isDisc = roundness > 0.88 && vMin > 0.75 * vMax && rad > 0.02f && discFill > 0.45f
         val plane = if (isDisc) {
             val cc = floatArrayOf(c[0] + e1[0] * mu + e2[0] * mv, c[1] + e1[1] * mu + e2[1] * mv, c[2] + e1[2] * mu + e2[2] * mv)
             FitPlane(cc, n, e1, e2, true, rad, rad, rad, color, kk)
@@ -664,7 +722,7 @@ object PrimitiveFit {
             val ml = sqrt(mx * mx + my * my + mz * mz); mx /= ml; my /= ml; mz /= ml
             val center = floatArrayOf(start[0] + mx * rb, start[1] + my * rb, start[2] + mz * rb)
             val axis = floatArrayOf(ua[1] * mz - ua[2] * my, ua[2] * mx - ua[0] * mz, ua[0] * my - ua[1] * mx)
-            out.add(FitElbow(start, ua, center, axis, turn, rb, r, a.color))
+            out.add(FitElbow(start, ua, center, axis, turn, rb, r, a.color).also { it.tubeA = a; it.tubeB = b })
             used.add(i * 2 + bi); used.add(j * 2 + bj)
         }
         return out
