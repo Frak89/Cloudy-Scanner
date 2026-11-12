@@ -47,6 +47,23 @@ Tocca l'oggetto nella vista AR per selezionarlo. Da quel momento:
 | Analizza l'oggetto | Ingombro in cm, punti, forma, colori dominanti, viste mancanti; con il modello IA anche nome, materiali e consigli, da un mosaico delle foto migliori. |
 | IA live | Ogni pochi secondi il modello guarda l'inquadratura (ritagliata sull'oggetto), dice cosa vede e, se non è sicuro, chiede cosa mostrargli. |
 
+## Forme regolari in NURBS (Mesh ▾ → Ricostruisci NURBS)
+
+La nuvola (dell'oggetto selezionato, o tutta) viene cercata per forme regolari, che diventano superfici NURBS esatte:
+
+- **tubi** a sezione circolare e asse rettilineo, divisi dove cambia lo spessore (parte più grossa / più sottile);
+- **curve** di raccordo tra due tubi (toro esatto; l'angolo e il raggio di curvatura sono ricavati dai punti);
+- **dischi** (cerchio NURBS) e **piani rettangolari**.
+
+Il rilevamento è un RANSAC su punti orientati, rifinito ai minimi quadrati. L'esportazione **IGES** (entità 128) si apre in
+FreeCAD, Rhino, Fusion; il file è stato verificato con OpenCascade. Le forme libere restano come nuvola/mesh.
+
+## Ricostruzione da foto importate (Foto → 3D)
+
+Scegli più foto dello stesso soggetto: l'app trova gli stessi dettagli nelle varie foto (SIFT, OpenCV), calcola da dove è
+stata scattata ciascuna e triangola una nuvola di punti colorata che cresce foto dopo foto. Poi si usa come una scansione:
+mesh, NURBS, cancellazione, esportazione.
+
 ## Limiti da conoscere
 
 - Il Pixel 7 Pro non ha un sensore di profondità (ToF/LiDAR) accessibile alle app: la profondità è
@@ -57,6 +74,9 @@ Tocca l'oggetto nella vista AR per selezionarlo. Da quel momento:
 - Le foto migliorano colore, riconoscimento ed esportazione (con pose, per fotogrammetria esterna); la geometria resta quella
   della profondità ARCore.
 - Nel ricolorare, l'occlusione è stimata solo dall'orientamento della superficie.
+- NURBS: con il rumore della profondità ARCore servono tubi di almeno 4–5 cm di diametro; oggetti più sottili non vengono riconosciuti.
+- Foto → 3D produce una nuvola rada (migliaia di punti sui dettagli ben visibili), senza scala reale e senza la rifinitura
+  globale dei programmi di fotogrammetria da computer. Superfici lisce o lucide restano vuote.
 
 ## Sviluppo
 

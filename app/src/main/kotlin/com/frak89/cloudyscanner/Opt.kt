@@ -48,7 +48,7 @@ object Opt {
 
     // Mesh
     @Volatile var realtimeMesh = false
-    /** 0 low, 1 mid, 2 high */
+    /** 0 low, 1 mid, 2 high, 3 NURBS (regular shapes) */
     @Volatile var meshLevel = 1
     @Volatile var smoothIters = 1
 
@@ -57,6 +57,7 @@ object Opt {
     @Volatile var brush = 46f
 
     val levelCell = floatArrayOf(0.08f, 0.04f, 0.02f)
-    val levelName = arrayOf("LOW", "MID", "HIGH")
+    val levelName = arrayOf("LOW", "MID", "HIGH", "NURBS")
+    const val LEVEL_NURBS = 3
     val colorNames = arrayOf("Bianco", "Colore reale", "Affidabilità", "Distanza", "Altezza", "Normali")
 }

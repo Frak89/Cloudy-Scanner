@@ -68,6 +68,13 @@ object Storage {
         return f
     }
 
+    /** IGES file with one rational B-spline surface per shape; opens in FreeCAD, Rhino, Fusion and similar. */
+    fun exportIges(ctx: Context, surfaces: List<com.frak89.cloudyscanner.core.NurbsSurface>): File {
+        val f = File(appDir(ctx), "nurbs_${stamp()}.igs")
+        f.writeText(com.frak89.cloudyscanner.core.NurbsSurface.toIges(surfaces, "scan ${stamp()}"), Charsets.US_ASCII)
+        return f
+    }
+
     /** Wavefront OBJ with vertex colours; faces as quads or split into triangles. */
     fun exportObj(ctx: Context, m: MeshData, asQuads: Boolean): File {
         val f = File(appDir(ctx), "mesh_${stamp()}_${if (asQuads) "quads" else "tris"}.obj")

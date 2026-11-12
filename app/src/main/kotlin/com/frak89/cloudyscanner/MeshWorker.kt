@@ -2,6 +2,8 @@ package com.frak89.cloudyscanner
 
 import com.frak89.cloudyscanner.core.MeshData
 import com.frak89.cloudyscanner.core.Mesher
+import com.frak89.cloudyscanner.core.NurbsSurface
+import com.frak89.cloudyscanner.core.PrimitiveFit
 import com.frak89.cloudyscanner.core.PointMap
 import com.frak89.cloudyscanner.gl.MeshGpu
 import com.frak89.cloudyscanner.gl.SceneRenderer
@@ -16,6 +18,9 @@ class MeshWorker(private val map: PointMap, private val renderer: SceneRenderer)
     @Volatile var progress = 0f
     @Volatile var lastMs = 0f
     @Volatile var builtVersion = -1L
+    /** Exact surfaces behind the current mesh when it was built in NURBS mode. */
+    @Volatile var nurbs: List<NurbsSurface>? = null
+    @Volatile var nurbsInfo = ""
     private val exec = Executors.newSingleThreadExecutor { r -> Thread(r, "mesher").apply { priority = Thread.NORM_PRIORITY - 1 } }
     private val gen = AtomicInteger()
 
@@ -39,18 +44,38 @@ class MeshWorker(private val map: PointMap, private val renderer: SceneRenderer)
     private fun build(lvl: Int, smooth: Int, islands: Int, revealSec: Float, g: Int): MeshData? {
         val t0 = System.nanoTime()
         val n: Int; val pos: FloatArray; val nrm: FloatArray; val col: IntArray; val ver: Long
+        var subject: BooleanArray? = null
         map.lock.lock()
         try {
             n = map.size; ver = map.version
             pos = map.pos.copyOf(n * 3); nrm = map.nrm.copyOf(n * 3); col = map.col.copyOf(n)
+            if (lvl == Opt.LEVEL_NURBS && map.countFlag(PointMap.SUBJECT) > 200) subject = BooleanArray(n) { map.hasFlag(it, PointMap.SUBJECT) }
         } finally { map.lock.unlock() }
         progress = 0f
+        if (lvl == Opt.LEVEL_NURBS) {
+            // Regular shapes only: tubes, bends, discs and flat faces, each an exact NURBS surface.
+            progress = 0.2f
+            val sel = subject
+            val fit = PrimitiveFit.fit(n, pos, nrm, col, if (sel == null) null else { i -> sel[i] }, 1L) { gen.get() != g }
+            if (gen.get() != g) return null
+            val surf = fit.surfaces()
+            val m = NurbsSurface.tessellate(surf)
+            val gpu = MeshGpu(m)
+            if (gen.get() != g) return null
+            nurbs = surf; nurbsInfo = fit.describe()
+            mesh = m; level = lvl; builtVersion = ver
+            lastMs = (System.nanoTime() - t0) / 1e6f
+            progress = 1f
+            renderer.setMesh(gpu, revealSec)
+            return m
+        }
         var m = Mesher.build(n, pos, nrm, col, Opt.levelCell[lvl], cancel = { gen.get() != g }, progress = { progress = it }) ?: return null
         if (islands > 0) m = Mesher.removeIslands(m, islands)
         if (smooth > 0) m = Mesher.smooth(m, smooth)
         if (gen.get() != g) return null
         val gpu = MeshGpu(m)
         if (gen.get() != g) return null
+        nurbs = null; nurbsInfo = ""
         mesh = m; level = lvl; builtVersion = ver
         lastMs = (System.nanoTime() - t0) / 1e6f
         renderer.setMesh(gpu, revealSec)
@@ -60,7 +85,7 @@ class MeshWorker(private val map: PointMap, private val renderer: SceneRenderer)
     fun clear() {
         gen.incrementAndGet()
         busy = false
-        mesh = null; level = -1
+        mesh = null; level = -1; nurbs = null; nurbsInfo = ""
         renderer.setMesh(null, 0f)
     }
 

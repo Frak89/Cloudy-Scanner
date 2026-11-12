@@ -10,8 +10,8 @@ android {
         applicationId = "com.frak89.cloudyscanner"
         minSdk = 31
         targetSdk = 37
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
         ndk { abiFilters += "arm64-v8a" }
     }
 
@@ -49,5 +49,7 @@ android {
 dependencies {
     implementation("com.google.ar:core:1.50.0")
     implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
+    // Feature matching and camera-pose solving for reconstruction from imported photos.
+    implementation("org.opencv:opencv:4.12.0")
     testImplementation("junit:junit:4.13.2")
 }

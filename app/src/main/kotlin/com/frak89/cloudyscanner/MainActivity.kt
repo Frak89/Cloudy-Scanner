@@ -4,7 +4,9 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.DownloadManager
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -43,6 +45,7 @@ import com.frak89.cloudyscanner.gl.HudState
 import com.frak89.cloudyscanner.gl.SceneRenderer
 import com.frak89.cloudyscanner.scan.CameraInfo
 import com.frak89.cloudyscanner.scan.PhotoPlanner
+import com.frak89.cloudyscanner.scan.PhotoRecon
 import com.frak89.cloudyscanner.scan.PhotoStore
 import com.frak89.cloudyscanner.scan.ScanEngine
 import com.frak89.cloudyscanner.ui.HudView
@@ -70,6 +73,12 @@ class MainActivity : Activity(), Director.Ui {
     private lateinit var photos: PhotoStore
     private lateinit var live: LiveVision
     private lateinit var liveBtn: TextView
+    private lateinit var recon: PhotoRecon
+    private lateinit var objBtn: TextView
+    private lateinit var meshBtn: TextView
+    private lateinit var aiBtn: TextView
+    private lateinit var optBtn: TextView
+    private lateinit var importBtn: TextView
     private var lastComplexityNs = 0L
     private var lastPaletteSize = 0
     private var aiLevelKnown = false
@@ -115,6 +124,7 @@ class MainActivity : Activity(), Director.Ui {
         ai = LocalAi(this)
         director = Director(map, engine, meshes, renderer, ai, kb, eraser, this)
         photos = PhotoStore(this, planner, engine.subject)
+        recon = PhotoRecon(this, map)
         engine.fusion.frameHook = { photos.onFrame(it) }
         live = LiveVision(ai, kb, { grabCamera(true) }, { liveFacts() }, { aiBusy || director.running },
             { msg -> ui.post { aiStatus.text = msg; if (!live.running) { Opt.aiLive = false; refreshControls() } } },
@@ -150,6 +160,7 @@ class MainActivity : Activity(), Director.Ui {
     override fun onDestroy() {
         ui.removeCallbacksAndMessages(null)
         director.stop()
+        recon.cancel = true
         live.stop()
         engine.fusion.frameHook = null
         meshes.shutdown()
@@ -227,7 +238,7 @@ class MainActivity : Activity(), Director.Ui {
     private fun choice(parent: LinearLayout, labels: Array<String>, get: () -> Int, set: (Int) -> Unit) {
         val row = LinearLayout(this)
         val views = ArrayList<TextView>()
-        fun paint() { views.forEachIndexed { i, v -> v.background = rounded(if (i == get()) ACCENT_DIM else BTN, 10f) } }
+        fun paint() { views.forEachIndexed { i, v -> v.background = rounded(if (i == get()) ACTIVE else BTN, 10f); v.setTextColor(if (i == get()) 0xFF10131A.toInt() else TEXT) } }
         labels.forEachIndexed { i, l ->
             val v = TextView(this).apply {
                 text = l; setTextColor(TEXT); textSize = 13f; gravity = Gravity.CENTER
@@ -287,17 +298,23 @@ class MainActivity : Activity(), Director.Ui {
 
         // Bottom bar
         val bar = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8f), 0, 0, 0) }
-        scanBtn = pill("●  Scan", REC) { toggleScan() }
+        scanBtn = pill("●  Scan") { toggleScan() }
         viewBtn = pill("Vista: AR") { setOrbit(!Opt.orbit) }
         eraseBtn = pill("Cancella") { setErase(!Opt.eraseMode) }
+        objBtn = pill("Oggetto ▾") { showObjectMenu(it) }
+        meshBtn = pill("Mesh ▾") { showMeshMenu(it) }
+        aiBtn = pill("IA") { toggle(aiPanel, optionsPanel) }
+        optBtn = pill("Opzioni") { toggle(optionsPanel, aiPanel) }
+        importBtn = pill("Foto → 3D") { importPhotos() }
         bar.addView(scanBtn)
         bar.addView(viewBtn)
-        bar.addView(pill("Oggetto ▾") { showObjectMenu(it) })
-        bar.addView(pill("Mesh ▾") { showMeshMenu(it) })
+        bar.addView(objBtn)
+        bar.addView(meshBtn)
         bar.addView(eraseBtn)
-        bar.addView(pill("IA") { toggle(aiPanel, optionsPanel) })
+        bar.addView(importBtn)
+        bar.addView(aiBtn)
         bar.addView(pill("Fotocamere") { showCameras() })
-        bar.addView(pill("Opzioni") { toggle(optionsPanel, aiPanel) })
+        bar.addView(optBtn)
         val barScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(bar) }
         overlay.addView(barScroll, FrameLayout.LayoutParams(MATCH_PARENT, dp(52f), Gravity.BOTTOM).apply { bottomMargin = dp(6f) })
 
@@ -385,7 +402,7 @@ class MainActivity : Activity(), Director.Ui {
         action(col, "Sgancia il soggetto") { engine.unlockSubject() }
 
         header(col, "Ricostruzione")
-        choice(col, arrayOf("Low", "Mid", "High"), { Opt.meshLevel }) { rebuild(it) }
+        choice(col, arrayOf("Low", "Mid", "High", "NURBS"), { Opt.meshLevel }) { rebuild(it) }
         slider(col, "Smoothing", 0f, 3f, { Opt.smoothIters.toFloat() }, { "${Math.round(it)}×" }) { Opt.smoothIters = Math.round(it) }
         sw(col, "Ricostruzione in tempo reale", { Opt.realtimeMesh }) { Opt.realtimeMesh = it }
 
@@ -426,7 +443,7 @@ class MainActivity : Activity(), Director.Ui {
     private fun toggle(show: View, hide: View) {
         hide.visibility = View.GONE
         show.visibility = if (show.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-        if (show.visibility == View.VISIBLE) refreshControls()
+        refreshControls()
     }
 
     override fun refreshControls() {
@@ -434,9 +451,18 @@ class MainActivity : Activity(), Director.Ui {
             refreshers.forEach { it() }
             viewBtn.text = if (Opt.orbit) "Vista: Orbita" else "Vista: AR"
             scanBtn.text = if (engine.scanning) "■  Stop" else "●  Scan"
-            eraseBtn.background = rounded(if (Opt.eraseMode) PURPLE_DIM else BTN, 22f)
+            // Every button that is switched on, or whose panel is open, gets the highlight colour.
+            fun mark(b: TextView, on: Boolean, onColor: Int = ACTIVE) { b.background = rounded(if (on) onColor else BTN, 22f); b.setTextColor(if (on && onColor == ACTIVE) 0xFF10131A.toInt() else TEXT) }
+            mark(scanBtn, engine.scanning, REC)
+            mark(viewBtn, Opt.orbit)
+            mark(objBtn, Opt.focusSubject || Opt.palette256)
+            mark(meshBtn, Opt.realtimeMesh || meshes.mesh != null)
+            mark(importBtn, recon.running)
+            mark(aiBtn, aiPanel.visibility == View.VISIBLE)
+            mark(optBtn, optionsPanel.visibility == View.VISIBLE)
+            mark(eraseBtn, Opt.eraseMode, PURPLE_DIM)
             eraseBar.visibility = if (Opt.eraseMode) View.VISIBLE else View.GONE
-            liveBtn.background = rounded(if (Opt.aiLive) ACCENT_DIM else BTN, 22f)
+            mark(liveBtn, Opt.aiLive)
             liveBtn.text = if (Opt.aiLive) "IA live ●" else "IA live"
         }
     }
@@ -492,7 +518,13 @@ class MainActivity : Activity(), Director.Ui {
         Opt.meshLevel = level
         if (map.size < 100) { toast("Prima acquisisci dei punti con Scan"); return }
         meshes.request(level, Opt.smoothIters, 0, 1.2f) { m ->
-            if (m != null) ui.post { toast("${Opt.levelName[level]}: ${fmt(m.vertexCount)} vertici · ${fmt(m.quadCount)} quads · ${fmt(m.triangleCount)} triangoli") }
+            ui.post {
+                if (level == Opt.LEVEL_NURBS) {
+                    aiLog.append("\n\nNURBS: " + meshes.nurbsInfo)
+                    Toast.makeText(this, "NURBS: " + meshes.nurbsInfo, Toast.LENGTH_LONG).show()
+                } else if (m != null) toast("${Opt.levelName[level]}: ${fmt(m.vertexCount)} vertici · ${fmt(m.quadCount)} quads · ${fmt(m.triangleCount)} triangoli")
+                refreshControls()
+            }
         }
         refreshControls()
     }
@@ -501,6 +533,7 @@ class MainActivity : Activity(), Director.Ui {
         val pm = PopupMenu(this, anchor)
         val items = arrayOf(
             "Ricostruisci LOW poly", "Ricostruisci MID poly", "Ricostruisci HIGH poly",
+            "Ricostruisci NURBS (tubi, curve, dischi, piani)", "Esporta NURBS in IGES (per CAD)",
             if (Opt.realtimeMesh) "Tempo reale: ON → spegni" else "Tempo reale: OFF → accendi",
             "Rimuovi mesh", "Esporta mesh OBJ (quads)", "Esporta mesh OBJ (triangoli)", "Esporta nuvola PLY", "Nuova scansione (azzera tutto)",
         )
@@ -508,15 +541,17 @@ class MainActivity : Activity(), Director.Ui {
         pm.setOnMenuItemClickListener {
             when (it.itemId) {
                 0, 1, 2 -> rebuild(it.itemId)
-                3 -> { Opt.realtimeMesh = !Opt.realtimeMesh; refreshControls() }
-                4 -> meshes.clear()
-                5, 6 -> export { val m = meshes.mesh; if (m == null) null else Storage.exportObj(this, m, it.itemId == 5) }
-                7 -> export {
+                3 -> rebuild(Opt.LEVEL_NURBS)
+                4 -> export { val n = meshes.nurbs; if (n.isNullOrEmpty()) null else Storage.exportIges(this, n) }
+                5 -> { Opt.realtimeMesh = !Opt.realtimeMesh; refreshControls() }
+                6 -> { meshes.clear(); refreshControls() }
+                7, 8 -> export { val m = meshes.mesh; if (m == null) null else Storage.exportObj(this, m, it.itemId == 7) }
+                9 -> export {
                     map.lock.lock()
                     try { if (map.size == 0) null else Storage.exportPly(this, map) } finally { map.lock.unlock() }
                 }
-                8 -> AlertDialog.Builder(this).setMessage("Cancellare punti e mesh della scansione corrente?")
-                    .setPositiveButton("Azzera") { _, _ -> engine.reset(); meshes.clear(); updateEraseCount() }
+                10 -> AlertDialog.Builder(this).setMessage("Cancellare punti e mesh della scansione corrente?")
+                    .setPositiveButton("Azzera") { _, _ -> engine.reset(); meshes.clear(); updateEraseCount(); refreshControls() }
                     .setNegativeButton("Annulla", null).show()
             }
             true
@@ -554,6 +589,53 @@ class MainActivity : Activity(), Director.Ui {
         live.append(CameraInfo.describe(this, engine.cameraId))
         val tv = TextView(this).apply { text = live; setTextColor(TEXT); textSize = 12f; typeface = Typeface.MONOSPACE; setPadding(dp(18f), dp(12f), dp(18f), dp(12f)); setTextIsSelectable(true) }
         AlertDialog.Builder(this).setTitle("Fotocamere del telefono").setView(ScrollView(this).apply { addView(tv) }).setPositiveButton("Chiudi", null).show()
+    }
+
+    // ------------------------------------------------------------------ reconstruction from imported photos
+
+    private fun importPhotos() {
+        if (recon.running) {
+            AlertDialog.Builder(this).setMessage("Interrompere la ricostruzione dalle foto?")
+                .setPositiveButton("Interrompi") { _, _ -> recon.cancel = true }.setNegativeButton("Continua", null).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Ricostruzione 3D da foto")
+            .setMessage("Scegli da 3 a ${PhotoRecon.MAX_PHOTOS} foto dello stesso soggetto, scattate girandogli attorno con molta sovrapposizione " +
+                "(circa 15° tra una e l'altra) e in ordine. La nuvola cresce foto dopo foto.\n\nLa scansione attuale viene sostituita.")
+            .setPositiveButton("Scegli le foto") { _, _ ->
+                val i = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                try { startActivityForResult(i, REQ_PHOTOS) } catch (t: Throwable) { toast("Nessuna app per scegliere le foto") }
+            }
+            .setNegativeButton("Annulla", null).show()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_PHOTOS || resultCode != RESULT_OK || data == null) return
+        val uris = ArrayList<Uri>()
+        val clip = data.clipData
+        if (clip != null) for (i in 0 until clip.itemCount) uris.add(clip.getItemAt(i).uri) else data.data?.let { uris.add(it) }
+        if (uris.size < 2) { toast("Servono almeno 2 foto (meglio 8 o più)"); return }
+        // Keep shooting order: file names from the camera sort by time.
+        uris.sortBy { it.lastPathSegment ?: "" }
+        val use = uris.take(PhotoRecon.MAX_PHOTOS)
+        engine.scanning = false
+        engine.reset(); meshes.clear(); photos.clear()
+        Opt.orbit = true; Opt.colorMode = 1; Opt.showPoints = true
+        aiPanel.visibility = View.VISIBLE; optionsPanel.visibility = View.GONE
+        aiLog.text = "RICOSTRUZIONE DA ${use.size} FOTO"
+        refreshControls()
+        thread(name = "photo-recon") {
+            var first = true
+            recon.run(use) { line ->
+                say(line)
+                if (first && map.size > 0) { first = false; ui.post { renderer.recenter() } }
+            }
+            ui.post { renderer.recenter(); refreshControls() }
+        }
+        ui.postDelayed({ refreshControls() }, 300)
     }
 
     // ------------------------------------------------------------------ selected object
@@ -924,7 +1006,10 @@ class MainActivity : Activity(), Director.Ui {
             sb.append('\n')
             val m = meshes.mesh
             if (meshes.busy) sb.append("Mesh: ricostruzione ${(meshes.progress * 100).toInt()}%")
-            else if (m != null) sb.append("Mesh ${Opt.levelName[meshes.level.coerceIn(0, 2)]}  V ${fmt(m.vertexCount)}  Q ${fmt(m.quadCount)}  T ${fmt(m.triangleCount)}  (${meshes.lastMs.toInt()} ms)")
+            else if (m != null) {
+                sb.append("Mesh ${Opt.levelName[meshes.level.coerceIn(0, 3)]}  V ${fmt(m.vertexCount)}  Q ${fmt(m.quadCount)}  T ${fmt(m.triangleCount)}  (${meshes.lastMs.toInt()} ms)")
+                if (meshes.nurbsInfo.isNotEmpty()) sb.append("\n").append(meshes.nurbsInfo)
+            }
             else sb.append("Mesh: —")
             sb.append('\n')
             sb.append(if (s.valid) String.format(Locale.US, "Soggetto %.2f m", s.distance) else "Soggetto —")
@@ -944,6 +1029,7 @@ class MainActivity : Activity(), Director.Ui {
             stats.text = sb
 
             val msg = when {
+                recon.running -> recon.status.ifEmpty { "Ricostruzione dalle foto in corso…" }
                 arMessage != null -> arMessage
                 !engine.tracking -> engine.trackingText
                 director.running -> null
@@ -958,7 +1044,7 @@ class MainActivity : Activity(), Director.Ui {
             if (msg == null) banner.visibility = View.GONE
             else {
                 banner.text = msg; banner.visibility = View.VISIBLE
-                banner.background = rounded(if (arMessage != null || !engine.tracking) 0xFFFF6B5E.toInt() else if (engine.guidance.active && engine.scanning) WARN else 0xFFE8EAF0.toInt(), 18f)
+                banner.background = rounded(if (recon.running) ACTIVE else if (arMessage != null || !engine.tracking) 0xFFFF6B5E.toInt() else if (engine.guidance.active && engine.scanning) WARN else 0xFFE8EAF0.toInt(), 18f)
             }
 
             val now = System.nanoTime()
@@ -974,7 +1060,7 @@ class MainActivity : Activity(), Director.Ui {
                 } finally { map.lock.unlock() }
             }
             if (Opt.palette256 && engine.scanning && kotlin.math.abs(map.size - lastPaletteSize) > lastPaletteSize / 5 + 500) { lastPaletteSize = map.size; rebuildPalette() }
-            if (Opt.realtimeMesh && engine.scanning && !meshes.busy && map.version != meshes.builtVersion && now - lastRealtimeNs > 900_000_000L && hud.points > 300) {
+            if (Opt.realtimeMesh && (engine.scanning || recon.running) && !meshes.busy && map.version != meshes.builtVersion && now - lastRealtimeNs > 900_000_000L && hud.points > 300) {
                 lastRealtimeNs = now
                 meshes.request(Opt.meshLevel, 0, 0, 0f)
             }
@@ -1058,12 +1144,15 @@ class MainActivity : Activity(), Director.Ui {
     }
 
     companion object {
+        const val REQ_PHOTOS = 41
         const val TEXT = 0xFFE8EAF0.toInt()
         const val MUTED = 0xFF9BA1B0.toInt()
         const val PANEL = 0xE6191B22.toInt()
         const val BTN = 0xE62B2E39.toInt()
         const val ACCENT = 0xFF4DE6FF.toInt()
         const val ACCENT_DIM = 0xFF1F6F85.toInt()
+        /** Background of a button that is switched on. */
+        const val ACTIVE = 0xFF4DE6FF.toInt()
         const val PURPLE = 0xFFC77DFF.toInt()
         const val PURPLE_DIM = 0xFF7B2FBF.toInt()
         const val REC = 0xFFD9392B.toInt()
