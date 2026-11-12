@@ -29,7 +29,7 @@ jobs:
         run: |
           set -o pipefail
           chmod +x gradlew
-          ./gradlew --no-daemon --stacktrace testReleaseUnitTest assembleRelease 2>&1 | tee build.log
+          ./gradlew --no-daemon testDebugUnitTest assembleRelease 2>&1 | tee build.log
       - name: Upload APK artifact
         if: steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
