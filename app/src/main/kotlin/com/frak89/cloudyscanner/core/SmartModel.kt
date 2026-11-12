@@ -308,9 +308,15 @@ object SmartModel {
     }
 
     /** Typical finishing by object type and option: rim chamfers, and the rolled rim of a can. */
-    private fun finish(prof: ArrayList<FloatArray>, opt: SmartOptions, notes: ArrayList<String>) {
+    private fun finish(prof: ArrayList<FloatArray>, opt: SmartOptions, notes: ArrayList<String>, resting: BooleanArray) {
         val h = opt.hint.lowercase()
-        val can = h.contains("lattin") || h.contains("barattol") || h.contains("can ")
+        // The hint names the object being scanned; other round things in view (table legs…) must
+        // not get a can's rim, so the proportions have to fit too: a plain cylinder 4-12 cm wide,
+        // one to three and a half times as tall.
+        var rr = 0f; for (p in prof) rr = max(rr, p[1])
+        val tall = prof[prof.size - 1][0] - prof[0][0]
+        val plain = prof.size == 2 && abs(prof[0][1] - prof[1][1]) < 1e-5f
+        val can = (h.contains("lattin") || h.contains("barattol") || h.contains("can ")) && plain && rr in 0.02f..0.06f && tall > 2f * rr && tall < 7f * rr
         if (!opt.bevel && !can) return
         fun chamfer(atStart: Boolean, frac: Float) {
             val n = prof.size
@@ -324,8 +330,9 @@ object SmartModel {
             val t = e[0]; val r = e[1]
             if (atStart) { e[1] = r - b; prof.add(1, floatArrayOf(t + b, r)) } else { e[1] = r - b; prof.add(n - 1, floatArrayOf(t - b, r)) }
         }
-        chamfer(true, if (can) 0.1f else 0.07f)
-        chamfer(false, if (can) 0.1f else 0.07f)
+        // No chamfer where the solid stands on (or hangs from) another face: that edge is a joint.
+        if (!resting[0] || can) chamfer(true, if (can) 0.1f else 0.07f)
+        if (!resting[1] || can) chamfer(false, if (can) 0.1f else 0.07f)
         if (can && prof.size >= 3) {
             // Rolled rim with the lid set slightly below it.
             val e = prof[prof.size - 1]
@@ -474,6 +481,7 @@ object SmartModel {
         // (or hang exactly under) the slabs.
         val thick = FloatArray(fit.planes.size) { if (fit.planes[it].disc) 0f else thickness(fit, it) }
         val revs = ArrayList<Pair<Axis, ArrayList<FloatArray>>>()
+        val resting = HashMap<Axis, BooleanArray>()
         for (a in axes) {
             if (cancel?.invoke() == true) return null
             var prof = profile(fit, a, opt.level, used)
@@ -499,7 +507,10 @@ object SmartModel {
                     val other = prof[if (endIdx == 0) 1 else prof.size - 2]
                     val moved = e[0] + bestMove
                     // never fold the profile over its neighbour
-                    if ((endIdx == 0 && moved < other[0] - 1e-4f) || (endIdx != 0 && moved > other[0] + 1e-4f)) { e[0] = moved; squaredExtra++ }
+                    if ((endIdx == 0 && moved < other[0] - 1e-4f) || (endIdx != 0 && moved > other[0] + 1e-4f)) {
+                        e[0] = moved; squaredExtra++
+                        resting.getOrPut(a) { BooleanArray(2) }[if (endIdx == 0) 0 else 1] = true
+                    }
                 }
             }
             revs.add(Pair(a, prof))
@@ -515,7 +526,7 @@ object SmartModel {
         }
         for ((a, measured) in revs) {
             val prof = ArrayList(measured.map { it.copyOf() })
-            finish(prof, opt, notes)
+            finish(prof, opt, notes, resting[a] ?: BooleanArray(2))
             var r = 0f; for (p in prof) r = max(r, p[1])
             lathe(b, surf, a, prof, sidesFor(opt.level, r, opt.sides), true, true, "Rotazione_${++nRev}")
             solids++

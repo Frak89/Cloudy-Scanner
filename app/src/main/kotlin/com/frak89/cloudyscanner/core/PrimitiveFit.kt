@@ -141,11 +141,15 @@ object PrimitiveFit {
         val minInliers = max(120, total / 40)
         val idx = IntArray(total); val tmp = IntArray(total)
         var fails = 0
+        // Points of candidates that were tried and rejected: left in place, but no longer used to
+        // propose shapes, so one stubborn impostor cannot keep everything else from being found.
+        val tried = BooleanArray(total)
 
-        while (aliveCount >= minInliers && planes.size + tubes.size < 16 && fails < 3) {
+        while (aliveCount >= minInliers && planes.size + tubes.size < 24 && fails < 6) {
             if (cancel?.invoke() == true) break
             var na = 0
-            for (i in 0 until total) if (alive[i]) idx[na++] = i
+            for (i in 0 until total) if (alive[i] && !tried[i]) idx[na++] = i
+            if (na < minInliers / 2) break
             val ns = min(na, 2500)
             val sub = IntArray(ns) { idx[if (na <= 2500) it else rnd.nextInt(na)] }
 
@@ -200,7 +204,16 @@ object PrimitiveFit {
             } else if (plane != null && planeCount >= minInliers) {
                 for (i in planeIdx!!) if (alive[i]) { alive[i] = false; aliveCount--; owner[i] = planes.size }
                 planes.add(plane); fails = 0
-            } else fails++
+            } else {
+                fails++
+                for (i in 0 until total) if (alive[i] && !tried[i]) {
+                    if (bestCc >= 12 && onCylinder(px[i], py[i], pz[i], nx[i], ny[i], nz[i], bc, tubeEps(bc[6]) * 1.5f)) tried[i] = true
+                    else if (bestP >= 0) {
+                        val dd = nx[bestP] * (px[i] - px[bestP]) + ny[bestP] * (py[i] - py[bestP]) + nz[bestP] * (pz[i] - pz[bestP])
+                        if (abs(dd) < EPS && abs(nx[bestP] * nx[i] + ny[bestP] * ny[i] + nz[bestP] * nz[i]) > 0.75f) tried[i] = true
+                    }
+                }
+            }
         }
 
         val elbows = joinTubes(tubes, px, py, pz, total)
@@ -328,8 +341,11 @@ object PrimitiveFit {
             val u = vx * e1[0] + vy * e1[1] + vz * e1[2]; val v = vx * e2[0] + vy * e2[1] + vz * e2[2]
             val rho = sqrt(u * u + v * v)
             lists[b].add(rho)
-            if (abs(rho - r0) < 0.5f * r0 + 0.004f) {
-                tilt[b] += abs(nx[i] * d[0] + ny[i] * d[1] + nz[i] * d[2])
+            // Judge the wall only by points that face sideways: a lid or a base lies at the right
+            // distance too, but its normals run along the axis and say nothing about the wall.
+            val along = abs(nx[i] * d[0] + ny[i] * d[1] + nz[i] * d[2])
+            if (abs(rho - r0) < 0.5f * r0 + 0.004f && along < 0.7f) {
+                tilt[b] += along
                 align[b] += abs((nx[i] * e1[0] + ny[i] * e1[1] + nz[i] * e1[2]) * u + (nx[i] * e2[0] + ny[i] * e2[1] + nz[i] * e2[2]) * v) / max(1e-6f, rho)
                 near[b]++
             }
