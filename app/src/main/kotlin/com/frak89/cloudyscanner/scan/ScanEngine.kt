@@ -7,6 +7,7 @@ import android.graphics.YuvImage
 import android.media.Image
 import com.frak89.cloudyscanner.core.PointMap
 import com.google.ar.core.ArCoreApk
+import com.google.ar.core.CameraConfigFilter
 import com.google.ar.core.Config
 import com.google.ar.core.Coordinates2d
 import com.google.ar.core.Frame
@@ -68,6 +69,7 @@ class ScanEngine(private val activity: Activity, val map: PointMap) {
     @Volatile var iso = 0
     @Volatile var exposureMs = 0f
     @Volatile var depthSize = ""
+    @Volatile var imageSize = ""
 
     val fusion = Fusion(map)
     val guidance get() = fusion.guidance
@@ -108,6 +110,11 @@ class ScanEngine(private val activity: Activity, val map: PointMap) {
                 c.planeFindingMode = Config.PlaneFindingMode.DISABLED
                 c.lightEstimationMode = Config.LightEstimationMode.DISABLED
                 s.configure(c)
+                // Largest CPU image the phone offers: sharper photos and better point colours.
+                try {
+                    val best = s.getSupportedCameraConfigs(CameraConfigFilter(s)).maxByOrNull { it.imageSize.width.toLong() * it.imageSize.height }
+                    if (best != null) { s.cameraConfig = best; imageSize = "${best.imageSize.width}x${best.imageSize.height}" }
+                } catch (_: Throwable) {}
                 cameraId = try { s.cameraConfig.cameraId } catch (e: Throwable) { "?" }
                 session = s
                 textureBound = false
@@ -292,6 +299,11 @@ class ScanEngine(private val activity: Activity, val map: PointMap) {
                 frame.transformCoordinates2d(Coordinates2d.TEXTURE_NORMALIZED, tin, Coordinates2d.IMAGE_PIXELS, tout)
                 j.toImg[0] = tout[0]; j.toImg[1] = tout[2] - tout[0]; j.toImg[2] = tout[4] - tout[0]
                 j.toImg[3] = tout[1]; j.toImg[4] = tout[3] - tout[1]; j.toImg[5] = tout[5] - tout[1]
+                val ii = frame.camera.imageIntrinsics
+                j.imgIntr[0] = ii.focalLength[0]; j.imgIntr[1] = ii.focalLength[1]
+                j.imgIntr[2] = ii.principalPoint[0]; j.imgIntr[3] = ii.principalPoint[1]
+                j.exposureMs = exposureMs
+                j.rot = rotation
                 j.hasColor = true
             }
         } catch (_: Throwable) {}

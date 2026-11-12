@@ -47,6 +47,16 @@ class Eraser(private val map: PointMap, private val renderer: SceneRenderer) {
         return added
     }
 
+    /** Replaces the selection with every point matching [pred]. Returns how many are selected. */
+    fun select(pred: (Int) -> Boolean): Int {
+        var n = 0
+        map.lock.lock()
+        try {
+            for (i in 0 until map.size) { val s = pred(i); map.setFlag(i, PointMap.SELECTED, s); if (s) n++ }
+        } finally { map.lock.unlock() }
+        return n
+    }
+
     fun selectedCount(): Int {
         map.lock.lock()
         try { return map.countFlag(PointMap.SELECTED) } finally { map.lock.unlock() }

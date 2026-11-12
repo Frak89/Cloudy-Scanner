@@ -39,6 +39,13 @@ object Opt {
     @Volatile var minConf = 0.35f
     @Volatile var subjRadius = 0.6f
 
+    // Object focus
+    /** Fuse only the locked subject; everything else in view is ignored. */
+    @Volatile var focusSubject = false
+    @Volatile var palette256 = false
+    @Volatile var photoAuto = true
+    @Volatile var aiLive = false
+
     // Mesh
     @Volatile var realtimeMesh = false
     /** 0 low, 1 mid, 2 high */

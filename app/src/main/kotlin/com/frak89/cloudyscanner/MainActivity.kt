@@ -33,11 +33,17 @@ import android.widget.TextView
 import android.widget.Toast
 import com.frak89.cloudyscanner.ai.Director
 import com.frak89.cloudyscanner.ai.KnowledgeBuffer
+import com.frak89.cloudyscanner.ai.LiveVision
 import com.frak89.cloudyscanner.ai.LocalAi
+import com.frak89.cloudyscanner.ai.Recognition
+import com.frak89.cloudyscanner.ai.VisionParse
+import com.frak89.cloudyscanner.core.Palette
 import com.frak89.cloudyscanner.core.PointMap
 import com.frak89.cloudyscanner.gl.HudState
 import com.frak89.cloudyscanner.gl.SceneRenderer
 import com.frak89.cloudyscanner.scan.CameraInfo
+import com.frak89.cloudyscanner.scan.PhotoPlanner
+import com.frak89.cloudyscanner.scan.PhotoStore
 import com.frak89.cloudyscanner.scan.ScanEngine
 import com.frak89.cloudyscanner.ui.HudView
 import java.io.ByteArrayOutputStream
@@ -60,6 +66,14 @@ class MainActivity : Activity(), Director.Ui {
     private lateinit var kb: KnowledgeBuffer
     private lateinit var ai: LocalAi
     private lateinit var director: Director
+    private val planner = PhotoPlanner()
+    private lateinit var photos: PhotoStore
+    private lateinit var live: LiveVision
+    private lateinit var liveBtn: TextView
+    private var lastComplexityNs = 0L
+    private var lastPaletteSize = 0
+    private var aiLevelKnown = false
+    private var lastPhotoEvent = ""
 
     private lateinit var glView: GLSurfaceView
     private lateinit var hudView: HudView
@@ -100,6 +114,11 @@ class MainActivity : Activity(), Director.Ui {
         kb = KnowledgeBuffer(this).also { it.load() }
         ai = LocalAi(this)
         director = Director(map, engine, meshes, renderer, ai, kb, eraser, this)
+        photos = PhotoStore(this, planner, engine.subject)
+        engine.fusion.frameHook = { photos.onFrame(it) }
+        live = LiveVision(ai, kb, { grabCamera(true) }, { liveFacts() }, { aiBusy || director.running },
+            { msg -> ui.post { aiStatus.text = msg; if (!live.running) { Opt.aiLive = false; refreshControls() } } },
+            { r, secs -> ui.post { onRecognition(r, secs) } })
         if (kb.bgStride in 1..3) engine.bgStride = kb.bgStride
         if (kb.runs > 0) { Opt.meshLevel = kb.preferredLevel; Opt.smoothIters = kb.smooth }
 
@@ -131,6 +150,8 @@ class MainActivity : Activity(), Director.Ui {
     override fun onDestroy() {
         ui.removeCallbacksAndMessages(null)
         director.stop()
+        live.stop()
+        engine.fusion.frameHook = null
         meshes.shutdown()
         engine.destroy()
         thread { ai.close() }
@@ -240,7 +261,7 @@ class MainActivity : Activity(), Director.Ui {
             renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
         }
         root.addView(glView, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-        hudView = HudView(this, hud, engine)
+        hudView = HudView(this, hud, engine, planner, photos)
         root.addView(hudView, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         overlay = FrameLayout(this)
         root.addView(overlay, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
@@ -271,6 +292,7 @@ class MainActivity : Activity(), Director.Ui {
         eraseBtn = pill("Cancella") { setErase(!Opt.eraseMode) }
         bar.addView(scanBtn)
         bar.addView(viewBtn)
+        bar.addView(pill("Oggetto ▾") { showObjectMenu(it) })
         bar.addView(pill("Mesh ▾") { showMeshMenu(it) })
         bar.addView(eraseBtn)
         bar.addView(pill("IA") { toggle(aiPanel, optionsPanel) })
@@ -386,6 +408,8 @@ class MainActivity : Activity(), Director.Ui {
         aiPanel.addView(aiStatus)
         val row = LinearLayout(this)
         row.addView(pill("Modello") { showModelDialog() })
+        liveBtn = pill("IA live") { toggleLive() }
+        row.addView(liveBtn)
         row.addView(pill("Analizza scena") { analyseScene() })
         row.addView(pill("▶ Aula virtuale", ACCENT_DIM) { startClassroom() })
         row.addView(pill("Memoria") { showMemory() })
@@ -412,6 +436,8 @@ class MainActivity : Activity(), Director.Ui {
             scanBtn.text = if (engine.scanning) "■  Stop" else "●  Scan"
             eraseBtn.background = rounded(if (Opt.eraseMode) PURPLE_DIM else BTN, 22f)
             eraseBar.visibility = if (Opt.eraseMode) View.VISIBLE else View.GONE
+            liveBtn.background = rounded(if (Opt.aiLive) ACCENT_DIM else BTN, 22f)
+            liveBtn.text = if (Opt.aiLive) "IA live ●" else "IA live"
         }
     }
 
@@ -530,6 +556,207 @@ class MainActivity : Activity(), Director.Ui {
         AlertDialog.Builder(this).setTitle("Fotocamere del telefono").setView(ScrollView(this).apply { addView(tv) }).setPositiveButton("Chiudi", null).show()
     }
 
+    // ------------------------------------------------------------------ selected object
+
+    private fun needSubject(): Boolean {
+        if (engine.subject.locked) return true
+        toast("Prima tocca l'oggetto nella vista AR per selezionarlo")
+        return false
+    }
+
+    private fun onSubjectLocked() {
+        photos.clear()
+        live.reset()
+        hud.objLabel = ""
+        aiLevelKnown = false
+        if (Opt.palette256) rebuildPalette()
+    }
+
+    private fun hasSubjectPoints(): Boolean {
+        map.lock.lock()
+        try { return map.countFlag(PointMap.SUBJECT) > 50 } finally { map.lock.unlock() }
+    }
+
+    private fun showObjectMenu(anchor: View) {
+        val pm = PopupMenu(this, anchor)
+        val lvl = if (planner.levelFixed) PhotoPlanner.LEVEL_NAMES[planner.level] else "Auto (${PhotoPlanner.LEVEL_NAMES[planner.level]})"
+        val items = arrayOf(
+            (if (Opt.focusSubject) "✔ " else "") + "Priorità all'oggetto (scansiona solo lui)",
+            "Elimina il superfluo (tieni solo l'oggetto)",
+            (if (Opt.palette256) "✔ " else "") + "Colora a 256 colori",
+            "Analizza l'oggetto",
+            (if (Opt.photoAuto) "✔ " else "") + "Foto automatiche dalle varie angolazioni",
+            "Scatta una foto adesso",
+            "Viste richieste: $lvl",
+            "Pulisci foto (mosse, poco dettagliate, doppie)",
+            "Ricolora la scansione dalle foto migliori",
+            "Esporta foto + pose in Download",
+            "Svuota le foto (${planner.count()})",
+        )
+        items.forEachIndexed { i, t -> pm.menu.add(0, i, i, t) }
+        pm.setOnMenuItemClickListener {
+            when (it.itemId) {
+                0 -> if (Opt.focusSubject || needSubject()) {
+                    Opt.focusSubject = !Opt.focusSubject
+                    toast(if (Opt.focusSubject) "Da ora acquisisco solo l'oggetto selezionato" else "Acquisisco di nuovo tutta la scena")
+                }
+                1 -> isolateSubject()
+                2 -> { Opt.palette256 = !Opt.palette256; if (Opt.palette256) rebuildPalette() else { renderer.palette = null; touchMap() } }
+                3 -> analyseObject()
+                4 -> { Opt.photoAuto = !Opt.photoAuto; toast(if (Opt.photoAuto) "Foto automatiche attive: seleziona un oggetto e avvia Scan" else "Foto automatiche spente") }
+                5 -> if (needSubject()) { photos.manualRequest = true }
+                6 -> AlertDialog.Builder(this).setTitle("Quante viste servono")
+                    .setItems(arrayOf("Automatico (lo decide la forma o l'IA)", "Semplice · 3 foto: davanti, dietro, sopra", "Media · 5 foto: 4 lati + sopra", "Complessa · 13 foto: giro completo a due altezze + sopra")) { _, i ->
+                        if (i == 0) { planner.levelFixed = false; lastComplexityNs = 0L }
+                        else photos.delete(planner.setLevel(i - 1, true))
+                    }.show()
+                7 -> {
+                    val gone = planner.prune(); photos.delete(gone)
+                    toast(if (gone.isEmpty()) "Nessuna foto da scartare" else "Scartate ${gone.size} foto · restano ${planner.count()}")
+                }
+                8 -> thread {
+                    val n = photos.recolor(map, hasSubjectPoints())
+                    ui.post { toast(if (n > 0) "Ricolorati ${fmt(n)} punti da ${planner.count()} foto" else "Servono prima delle foto dell'oggetto"); if (Opt.palette256) rebuildPalette() }
+                }
+                9 -> export { photos.export(this) }
+                10 -> { photos.clear(); toast("Foto eliminate") }
+            }
+            true
+        }
+        pm.show()
+    }
+
+    private fun touchMap() {
+        map.lock.lock()
+        try { map.touch() } finally { map.lock.unlock() }
+    }
+
+    /** Everything that was not observed as part of the selected object turns purple, then goes. */
+    private fun isolateSubject() {
+        if (!hasSubjectPoints()) { toast("Seleziona l'oggetto e scansionalo un po': non ho ancora punti suoi"); return }
+        val n = eraser.select { !map.hasFlag(it, PointMap.SUBJECT) }
+        if (n == 0) { toast("Non c'è nulla fuori dall'oggetto"); return }
+        AlertDialog.Builder(this)
+            .setMessage("Ho evidenziato in viola ${fmt(n)} punti che non fanno parte dell'oggetto. Li elimino? (Si può annullare da Cancella → Annulla)")
+            .setPositiveButton("Elimina") { _, _ -> val k = eraser.deleteSelected(); toast("Eliminati ${fmt(k)} punti"); remeshIfAny() }
+            .setNegativeButton("Tieni") { _, _ -> eraser.clearSelection() }
+            .setOnCancelListener { eraser.clearSelection() }
+            .show()
+    }
+
+    private fun buildPalette(): Palette? {
+        map.lock.lock()
+        try {
+            val subj = map.countFlag(PointMap.SUBJECT) > 50
+            renderer.paletteSubjectOnly = subj
+            lastPaletteSize = map.size
+            return Palette.build(map.col, map.size, 256) { !subj || map.hasFlag(it, PointMap.SUBJECT) }
+        } finally { map.lock.unlock() }
+    }
+
+    private fun rebuildPalette() {
+        thread {
+            val p = buildPalette()
+            if (Opt.palette256) { renderer.palette = p; touchMap() }
+            if (p == null) ui.post { toast("Servono punti con colore: fai prima una scansione") }
+        }
+    }
+
+    private fun cm(v: Float) = String.format(Locale.US, "%.0f", v * 100f)
+
+    /** Measurements and colours of the selected object (or of the whole cloud when nothing is selected). */
+    private fun objectReport(): String? {
+        val sb = StringBuilder()
+        val pal: Palette?
+        val level: Int
+        map.lock.lock()
+        try {
+            val subj = map.countFlag(PointMap.SUBJECT) > 50
+            val pick = { i: Int -> !subj || map.hasFlag(i, PointMap.SUBJECT) }
+            var n = 0; var conf = 0f
+            val lo = floatArrayOf(Float.MAX_VALUE, Float.MAX_VALUE, Float.MAX_VALUE); val hi = floatArrayOf(-Float.MAX_VALUE, -Float.MAX_VALUE, -Float.MAX_VALUE)
+            for (i in 0 until map.size) if (pick(i)) {
+                n++; conf += map.conf[i]
+                for (c in 0 until 3) { val v = map.pos[i * 3 + c]; if (v < lo[c]) lo[c] = v; if (v > hi[c]) hi[c] = v }
+            }
+            if (n < 100) return null
+            level = PhotoPlanner.complexity(map.nrm, map.size, pick)
+            pal = Palette.build(map.col, map.size, 256, pick)
+            sb.append(if (subj) "Oggetto selezionato" else "Intera scena (nessun oggetto selezionato)").append('\n')
+            sb.append("Ingombro: ${cm(hi[0] - lo[0])} × ${cm(hi[1] - lo[1])} × ${cm(hi[2] - lo[2])} cm (larghezza × altezza × profondità)\n")
+            sb.append("Punti: ${fmt(n)} · affidabilità media ${(conf / n * 100).toInt()}%\n")
+        } finally { map.lock.unlock() }
+        sb.append("Forma stimata: ${PhotoPlanner.LEVEL_NAMES[level].lowercase()}\n")
+        if (pal != null) sb.append("Colori (${pal.size} in palette): " + pal.namedShares().take(5).joinToString(", ") { "${it.first} ${(it.second * 100).toInt()}%" } + "\n")
+        val miss = planner.missing()
+        sb.append("Foto: ${planner.coveredCount()}/${planner.slots.size} viste" + (if (miss.isEmpty()) "" else " · mancano: " + miss.joinToString(", ")) + "\n")
+        if (photos.liveValid) sb.append(String.format(Locale.US, "Distanza %.2f m · ideale ~%.2f m · angolo dall'alto %.0f°\n", photos.live[2], photos.live[3], photos.live[1]))
+        return sb.toString()
+    }
+
+    private fun analyseObject() {
+        if (aiBusy || director.running) { toast("L'IA sta già lavorando"); return }
+        aiBusy = true
+        aiPanel.visibility = View.VISIBLE; optionsPanel.visibility = View.GONE
+        thread(name = "ai-object") {
+            try {
+                val report = objectReport()
+                if (report == null) { say("Servono più punti: seleziona l'oggetto e fai una scansione."); return@thread }
+                say("ANALISI DELL'OGGETTO\n$report")
+                if (!(ai.state == LocalAi.State.READY || ai.autoSelect())) { say("Per farmi dire che oggetto è serve il modello IA: tocca «Modello»."); return@thread }
+                stream(ai.status)
+                if (!ai.ensureLoaded()) { stream(null); say(ai.status); return@thread }
+                val sheet = photos.contactSheet()
+                val image = sheet ?: grabCamera(true) ?: grabSnapshot()
+                val p = StringBuilder()
+                p.append(if (sheet != null) "L'immagine è un mosaico di foto dello stesso oggetto da lati diversi.\n" else "L'immagine mostra l'oggetto.\n")
+                p.append("Misure dalla scansione 3D:\n").append(report)
+                val mem = kb.promptContext()
+                if (mem.isNotEmpty()) p.append(mem).append('\n')
+                val text = ai.generate(SYSTEM_OBJECT, p.toString(), listOfNotNull(image), 300) { stream(it) }
+                stream(null)
+                say("IA: " + text.trim())
+                val r = VisionParse.parse(text)
+                if (r.known) ui.post { onRecognition(r, 0f) }
+                text.lines().firstOrNull { it.trim().uppercase().startsWith("NOTA") }?.let { kb.addNote(it.substringAfter(':').trim()); kb.save() }
+            } catch (t: Throwable) {
+                stream(null); say("Analisi non riuscita: ${t.message ?: t.javaClass.simpleName}")
+            } finally { finished() }
+        }
+    }
+
+    // ------------------------------------------------------------------ live recognition
+
+    private fun toggleLive() {
+        Opt.aiLive = !Opt.aiLive
+        if (Opt.aiLive) { live.start(); toast("IA live: inquadra l'oggetto, ti dico cosa vedo ogni pochi secondi") } else live.stop()
+        refreshControls()
+    }
+
+    private fun liveFacts(): String {
+        val s = engine.subject
+        val sb = StringBuilder()
+        if (s.valid && s.locked) sb.append(String.format(Locale.US, "L'utente ha selezionato questo oggetto, a %.2f m, largo circa %.0f cm. ", s.distance, s.extent * 100f))
+        else sb.append("Nessun oggetto selezionato: considera ciò che sta al centro. ")
+        if (photos.liveValid) sb.append(String.format(Locale.US, "Lo sta guardando da %.0f° di lato e %.0f° dall'alto. ", photos.live[0], photos.live[1]))
+        val mem = kb.promptContext()
+        if (mem.isNotEmpty()) sb.append('\n').append(mem)
+        return sb.toString()
+    }
+
+    private fun onRecognition(r: Recognition, secs: Float) {
+        val before = hud.objLabel
+        hud.objLabel = if (r.known) "${r.name} · ${r.confidence}%" else ""
+        if (r.level >= 0) { aiLevelKnown = true; photos.delete(planner.setLevel(r.level, false)) }
+        val nameChanged = !before.startsWith(r.name + " ·")
+        if (r.known && nameChanged) {
+            say("IA live: vedo «${r.name}» (${r.confidence}%)" + (if (r.level >= 0) ", forma ${PhotoPlanner.LEVEL_NAMES[r.level].lowercase()} → ${planner.slots.size} viste" else "") +
+                (if (secs > 0f) String.format(Locale.US, " · %.0f s", secs) else ""))
+            if (r.confidence >= 80) { kb.addNote("«${r.name}»: forma ${PhotoPlanner.LEVEL_NAMES[planner.level].lowercase()}, bastano ${planner.slots.size} viste."); kb.save() }
+        }
+        if (r.ask.isNotEmpty() && r.confidence < 75) say("IA chiede: ${r.ask}")
+    }
+
     // ------------------------------------------------------------------ AI
 
     override fun say(line: String) {
@@ -567,7 +794,7 @@ class MainActivity : Activity(), Director.Ui {
                 if (!ai.ensureLoaded()) { stream(null); say(ai.status); return@thread }
                 stream("Preparo l'immagine…")
                 val fromCamera = !Opt.orbit
-                val image = if (fromCamera) grabCamera() ?: grabSnapshot() else grabSnapshot()
+                val image = if (fromCamera) grabCamera(false) ?: grabSnapshot() else grabSnapshot()
                 val s = engine.subject
                 val p = StringBuilder()
                 p.append(if (fromCamera) "L'immagine è il fotogramma attuale della fotocamera.\n" else "L'immagine è la nuvola di punti vista dall'esterno.\n")
@@ -595,19 +822,32 @@ class MainActivity : Activity(), Director.Ui {
         return out
     }
 
-    private fun grabCamera(): ByteArray? {
+    /**
+     * Current camera frame as an upright JPEG (longest side at most 1024 px). With [crop], it
+     * is cut to the selected object plus a margin, so the model looks at the object only.
+     */
+    private fun grabCamera(crop: Boolean = false): ByteArray? {
         val latch = CountDownLatch(1)
         var out: ByteArray? = null
         engine.jpegRequest = { out = it; latch.countDown() }
         if (!latch.await(2, TimeUnit.SECONDS)) { engine.jpegRequest = null; return null }
         val jpeg = out ?: return null
-        // The sensor image is landscape; turn it upright for the way the phone is held.
-        val deg = when (display?.rotation ?: 0) { 0 -> 90f; 2 -> 270f; 3 -> 180f; else -> 0f }
-        if (deg == 0f) return jpeg
         return try {
-            val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
-            val rot = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, android.graphics.Matrix().apply { postRotate(deg) }, true)
-            ByteArrayOutputStream().also { rot.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
+            var bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+            val s = engine.subject
+            if (crop && s.valid && s.locked) {
+                val r = s.imgRect
+                val mx = (r[2] - r[0]) * 0.2f; val my = (r[3] - r[1]) * 0.2f
+                val x0 = (r[0] - mx).toInt().coerceIn(0, bmp.width - 2); val y0 = (r[1] - my).toInt().coerceIn(0, bmp.height - 2)
+                val x1 = (r[2] + mx).toInt().coerceIn(x0 + 1, bmp.width); val y1 = (r[3] + my).toInt().coerceIn(y0 + 1, bmp.height)
+                if (x1 - x0 >= 48 && y1 - y0 >= 48) bmp = Bitmap.createBitmap(bmp, x0, y0, x1 - x0, y1 - y0)
+            }
+            // The sensor image is landscape; turn it upright for the way the phone is held.
+            val deg = when (display?.rotation ?: 0) { 0 -> 90f; 2 -> 270f; 3 -> 180f; else -> 0f }
+            val sc = minOf(1f, 1024f / maxOf(bmp.width, bmp.height))
+            val mtx = android.graphics.Matrix().apply { postScale(sc, sc); postRotate(deg) }
+            val fin = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, mtx, true)
+            ByteArrayOutputStream().also { fin.compress(Bitmap.CompressFormat.JPEG, 88, it) }.toByteArray()
         } catch (t: Throwable) { jpeg }
     }
 
@@ -693,6 +933,13 @@ class MainActivity : Activity(), Director.Ui {
             if (engine.focalLength > 0f) sb.append(String.format(Locale.US, "   %.1f mm f/%.2f ISO %d", engine.focalLength, engine.aperture, engine.iso))
             sb.append('\n')
             sb.append("Incerti ${fmt(engine.uncertainCount)} · ripassati ${engine.guidance.resolved} · ${engine.trackingText}")
+            if (s.locked) {
+                sb.append("\nFoto ${planner.coveredCount()}/${planner.slots.size} viste (${PhotoPlanner.LEVEL_NAMES[planner.level].lowercase()})")
+                val rej = planner.rejectedBlur + planner.rejectedSoft
+                if (rej + planner.replaced > 0) sb.append(" · scartate ${planner.rejectedBlur} mosse, ${planner.rejectedSoft} poco nitide · ${planner.replaced} migliorate")
+                if (Opt.focusSubject) sb.append(" · SOLO OGGETTO")
+            }
+            if (hud.objLabel.isNotEmpty()) sb.append("\nIA: ").append(hud.objLabel)
             if (engine.lastError.isNotEmpty()) sb.append("\n! ").append(engine.lastError)
             stats.text = sb
 
@@ -701,6 +948,9 @@ class MainActivity : Activity(), Director.Ui {
                 !engine.tracking -> engine.trackingText
                 director.running -> null
                 s.locked && s.moving -> "Soggetto in movimento: ricalcolo la posizione…"
+                Opt.aiLive && live.last.ask.isNotEmpty() && live.last.confidence < 75 -> "IA: " + live.last.ask
+                engine.scanning && s.locked && Opt.photoAuto && photos.liveValid && !planner.complete ->
+                    planner.advice(photos.live[0], photos.live[1], photos.live[2], photos.live[3])
                 engine.scanning && Opt.guidance && engine.guidance.active -> "Zona incerta: torna sul punto arancione e inquadralo lentamente"
                 !engine.scanning && hud.points == 0 -> "Tocca ● Scan e gira lentamente attorno al soggetto · tocca lo schermo per agganciarlo"
                 else -> null
@@ -712,6 +962,18 @@ class MainActivity : Activity(), Director.Ui {
             }
 
             val now = System.nanoTime()
+            val ev = photos.lastEvent
+            if (ev != lastPhotoEvent) { lastPhotoEvent = ev; if (ev.isNotEmpty()) toast(ev) }
+            // Without an AI verdict, estimate from the shape how many views the object needs.
+            if (s.locked && !planner.levelFixed && !aiLevelKnown && now - lastComplexityNs > 4_000_000_000L && map.lock.tryLock()) {
+                try {
+                    lastComplexityNs = now
+                    if (map.countFlag(PointMap.SUBJECT) > 400) {
+                        photos.delete(planner.setLevel(PhotoPlanner.complexity(map.nrm, map.size) { map.hasFlag(it, PointMap.SUBJECT) }, false))
+                    }
+                } finally { map.lock.unlock() }
+            }
+            if (Opt.palette256 && engine.scanning && kotlin.math.abs(map.size - lastPaletteSize) > lastPaletteSize / 5 + 500) { lastPaletteSize = map.size; rebuildPalette() }
             if (Opt.realtimeMesh && engine.scanning && !meshes.busy && map.version != meshes.builtVersion && now - lastRealtimeNs > 900_000_000L && hud.points > 300) {
                 lastRealtimeNs = now
                 meshes.request(Opt.meshLevel, 0, 0, 0f)
@@ -731,7 +993,7 @@ class MainActivity : Activity(), Director.Ui {
         val gestures = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onSingleTapUp(e: MotionEvent): Boolean {
                 if (!Opt.orbit && !Opt.eraseMode) {
-                    if (engine.lockSubjectAt(e.x, e.y)) toast("Soggetto agganciato · tieni premuto per sganciare")
+                    if (engine.lockSubjectAt(e.x, e.y)) { onSubjectLocked(); toast("Oggetto selezionato · tieni premuto per sganciare") }
                     else toast("Nessuna profondità in quel punto")
                 }
                 return true
@@ -806,6 +1068,14 @@ class MainActivity : Activity(), Director.Ui {
         const val PURPLE_DIM = 0xFF7B2FBF.toInt()
         const val REC = 0xFFD9392B.toInt()
         const val WARN = 0xFFFF9E1A.toInt()
+
+        const val SYSTEM_OBJECT = "Sei l'assistente dell'app Cloudy Scanner. Ricevi immagini di un oggetto e le misure ricavate dalla " +
+            "sua scansione 3D. Rispondi in italiano con queste righe:\n" +
+            "OGGETTO: <che cos'è, nome breve>\nSICUREZZA: <0-100>\nMATERIALE: <materiali probabili>\n" +
+            "COMPLESSITA: SEMPLICE oppure MEDIA oppure COMPLESSA\n" +
+            "RICHIESTA: <cosa mostrarti per esserne più sicuro, oppure NESSUNA>\n" +
+            "Poi due o tre frasi: descrivi l'oggetto usando anche misure e colori, e di' quali lati o dettagli conviene " +
+            "ancora fotografare e da che distanza. Chiudi con una riga NOTA: con una lezione breve e riutilizzabile."
 
         const val SYSTEM_ANALYSE = "Sei l'assistente di scansione 3D dell'app Cloudy Scanner su un telefono. Ricevi un'immagine e alcuni dati " +
             "della scansione in corso. Rispondi in italiano, in modo concreto, in 4-6 frasi: che cos'è il soggetto, quali superfici " +

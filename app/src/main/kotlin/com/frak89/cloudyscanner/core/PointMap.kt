@@ -178,20 +178,24 @@ class PointMap(val voxel: Float = 0.015f, val maxPoints: Int = 1_500_000) {
     /**
      * Packs the cloud for the GPU: xyz floats, RGBA bytes, normal xyz + confidence as bytes,
      * flags + 3 pad bytes. [STRIDE] bytes per point. Returns the number of points written.
+     * With a [palette], colours are reduced to it (for subject points only when asked).
      */
-    fun writeRenderBuffer(buf: ByteBuffer): Int {
+    fun writeRenderBuffer(buf: ByteBuffer, palette: Palette? = null, paletteSubjectOnly: Boolean = false): Int {
         val n = min(size, buf.capacity() / STRIDE)
         buf.clear()
         for (i in 0 until n) {
             val p = i * 3
             buf.putFloat(pos[p]); buf.putFloat(pos[p + 1]); buf.putFloat(pos[p + 2])
-            val c = col[i]
+            var c = col[i]
+            // 256-colour view: swap in the palette colour and tell the shader to show it as is.
+            val pal = palette != null && (!paletteSubjectOnly || (flags[i].toInt() and SUBJECT.toInt()) != 0)
+            if (pal) c = palette!!.map(c)
             buf.put((c shr 16).toByte()); buf.put((c shr 8).toByte()); buf.put(c.toByte()); buf.put(-1)
             val nx = nrm[p]; val ny = nrm[p + 1]; val nz = nrm[p + 2]
             val l = 127f / max(1e-6f, sqrt(nx * nx + ny * ny + nz * nz))
             buf.put((nx * l).toInt().toByte()); buf.put((ny * l).toInt().toByte()); buf.put((nz * l).toInt().toByte())
             buf.put((conf[i] * 127f).toInt().toByte())
-            buf.put(flags[i]); buf.put(0); buf.put(0); buf.put(0)
+            buf.put(if (pal) (flags[i].toInt() or PALETTE_BIT).toByte() else flags[i]); buf.put(0); buf.put(0); buf.put(0)
         }
         buf.flip()
         return n
@@ -203,6 +207,8 @@ class PointMap(val voxel: Float = 0.015f, val maxPoints: Int = 1_500_000) {
         const val SELECTED: Byte = 1
         const val SUBJECT: Byte = 2
         const val UNCERTAIN: Byte = 4
+        /** Render-buffer only: this point carries a palette colour. */
+        const val PALETTE_BIT = 8
         const val CONF_GAIN = 0.16f
         const val MAX_WEIGHT = 12f
         const val SNAP_VOXELS = 2

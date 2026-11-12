@@ -26,6 +26,11 @@ class FrameJob {
     var timeNs = 0L
     /** False when only the subject should be tracked, without adding points. */
     var insert = true
+    /** Intrinsics of the camera image (fx, fy, cx, cy), for reusing saved photos. */
+    val imgIntr = FloatArray(4)
+    var exposureMs = 0f
+    /** Display rotation (Surface.ROTATION_*) when the frame was taken. */
+    var rot = 0
 }
 
 /** What the scanner currently wants the user to look at again. */
@@ -49,6 +54,14 @@ class SubjectState {
     @Volatile var speed = 0f
     @Volatile var pixels = 0
     val bounds = FloatArray(6)
+    /** Subject rectangle in camera-image pixels (x0, y0, x1, y1). */
+    val imgRect = IntArray(4)
+    /** Share of the frame covered by the subject. */
+    @Volatile var fill = 0f
+    /** True when the subject does not touch the frame border. */
+    @Volatile var inside = false
+    /** Largest extent seen so far, in metres (slowly forgets). */
+    @Volatile var extent = 0f
 }
 
 /**
@@ -70,9 +83,13 @@ class Fusion(private val map: PointMap) {
     private var lastSubjNs = 0L
     private var lastFuseNs = 0L
 
+    /** Called on the fusion thread after every frame (photo capture hooks in here). */
+    @Volatile var frameHook: ((FrameJob) -> Unit)? = null
+
     fun lockAt(x: Float, y: Float, z: Float) {
         anchor[0] = x; anchor[1] = y; anchor[2] = z
         lostCount = 0
+        subject.extent = 0f
         subject.locked = true
     }
 
@@ -123,7 +140,10 @@ class Fusion(private val map: PointMap) {
         }
 
         trackSubject(j, w, h)
+        frameHook?.invoke(j)
         if (!j.insert) return
+        // Focus mode: everything that is not the selected object is left out of the scan.
+        val focus = Opt.focusSubject && subject.locked && subject.valid
 
         val stride = bgStride
         val invVoxel = 1f / map.voxel
@@ -135,7 +155,7 @@ class Fusion(private val map: PointMap) {
                 val i = v * w + u
                 if (valid[i] == 0.toByte()) continue
                 val subj = mask[i] != 0.toByte()
-                if (!subj && stride > 1 && ((u + v) % stride) != 0) continue
+                if (!subj && (focus || (stride > 1 && ((u + v) % stride) != 0))) continue
                 val o = i * 3
                 val z = -camPts[o + 2]
                 val tol = 0.04f * z + 0.01f
@@ -329,9 +349,12 @@ class Fusion(private val map: PointMap) {
         val b = subject.bounds
         var x0 = Float.MAX_VALUE; var y0 = Float.MAX_VALUE; var z0 = Float.MAX_VALUE
         var x1 = -Float.MAX_VALUE; var y1 = -Float.MAX_VALUE; var z1 = -Float.MAX_VALUE
+        var pu0 = w; var pv0 = h; var pu1 = 0; var pv1 = 0
         while (qh < qt) {
             val i = queue[qh++]
             val o = i * 3
+            val pu = i % w; val pv = i / w
+            if (pu < pu0) pu0 = pu; if (pu > pu1) pu1 = pu; if (pv < pv0) pv0 = pv; if (pv > pv1) pv1 = pv
             val wx = wldPts[o]; val wy = wldPts[o + 1]; val wz = wldPts[o + 2]
             cxw += wx; cyw += wy; czw += wz; cnt++
             if (wx < x0) x0 = wx; if (wy < y0) y0 = wy; if (wz < z0) z0 = wz
@@ -369,6 +392,23 @@ class Fusion(private val map: PointMap) {
         val dx = cxw - m[12]; val dy = cyw - m[13]; val dz = czw - m[14]
         subject.distance = sqrt(dx * dx + dy * dy + dz * dz)
         subject.pixels = cnt
+        subject.fill = ((pu1 - pu0 + 1) * (pv1 - pv0 + 1)).toFloat() / (w * h)
+        subject.inside = pu0 > 2 && pv0 > 2 && pu1 < w - 3 && pv1 < h - 3
+        if (j.hasColor) {
+            // Depth pixels -> camera-image pixels (the mapping is affine; take the bounding box).
+            var ix0 = Int.MAX_VALUE; var iy0 = Int.MAX_VALUE; var ix1 = 0; var iy1 = 0
+            for (k in 0 until 4) {
+                val uu = (if (k and 1 == 0) pu0 else pu1 + 1).toFloat() / w
+                val vv = (if (k and 2 == 0) pv0 else pv1 + 1).toFloat() / h
+                val ix = (j.toImg[0] + j.toImg[1] * uu + j.toImg[2] * vv).toInt()
+                val iy = (j.toImg[3] + j.toImg[4] * uu + j.toImg[5] * vv).toInt()
+                if (ix < ix0) ix0 = ix; if (ix > ix1) ix1 = ix; if (iy < iy0) iy0 = iy; if (iy > iy1) iy1 = iy
+            }
+            subject.imgRect[0] = ix0.coerceIn(0, j.iw); subject.imgRect[1] = iy0.coerceIn(0, j.ih)
+            subject.imgRect[2] = ix1.coerceIn(0, j.iw); subject.imgRect[3] = iy1.coerceIn(0, j.ih)
+        }
+        val ext = sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0) + (z1 - z0) * (z1 - z0))
+        subject.extent = max(ext, subject.extent * 0.995f)
         subject.valid = true
     }
 

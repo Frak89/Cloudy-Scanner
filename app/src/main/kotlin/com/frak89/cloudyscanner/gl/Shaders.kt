@@ -85,7 +85,9 @@ void main() {
   bool sel = mod(f, 2.0) >= 1.0;
   bool subj = mod(floor(f / 2.0), 2.0) >= 1.0;
   bool unc = mod(floor(f / 4.0), 2.0) >= 1.0;
-  if (subj && uShowSubject == 1) c = mix(c, vec3(0.35, 0.9, 1.0), 0.45);
+  bool pal = mod(floor(f / 8.0), 2.0) >= 1.0;
+  if (pal) c = aCol.rgb;
+  if (subj && uShowSubject == 1 && !pal) c = mix(c, vec3(0.35, 0.9, 1.0), 0.45);
   if (unc && uShowUncertain == 1) {
     c = mix(c, vec3(1.0, 0.62, 0.1), 0.6 + 0.4 * sin(uTime * 6.0));
     size *= 1.25;

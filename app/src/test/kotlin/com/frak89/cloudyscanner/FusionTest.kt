@@ -132,4 +132,30 @@ class FusionTest {
     check(cleared >= 0) { "revisiting must clear the target" }
     println("FUSION OK")
 }
+
+@Test fun focusModeScansOnlyTheSelectedObject() {
+    val map = PointMap(0.015f); val fusion = Fusion(map); val job = FrameJob(); val rnd = java.util.Random(9)
+    val C = floatArrayOf(0f, -0.6f, -2f); val R = 0.4f
+    val oldFocus = Opt.focusSubject; val oldRadius = Opt.subjRadius
+    try {
+        Opt.focusSubject = true; Opt.subjRadius = 0.6f; Opt.maxRange = 5f
+        fusion.lockAt(C[0], C[1] + R, C[2])
+        var frames = 0
+        fusion.frameHook = { frames++ }
+        for (k in 0 until 40) { val a = k * 2 * PI.toFloat() / 40
+            render(job, lookAtPose(floatArrayOf(C[0] + 1.6f * sin(a), 0.2f, C[2] + 1.6f * cos(a)), C), C, R, k + 1, rnd); fusion.fuse(job) }
+        check(frames == 40) { "hook must see every frame" }
+        check(map.size > 3000) { "the object itself must be scanned, got ${map.size}" }
+        var far = 0; var notSubject = 0
+        for (i in 0 until map.size) {
+            val d = sqrt((map.pos[i * 3] - C[0]).pow(2) + (map.pos[i * 3 + 1] - C[1]).pow(2) + (map.pos[i * 3 + 2] - C[2]).pow(2))
+            if (d > R + 0.6f + 0.25f) far++
+            if (!map.hasFlag(i, PointMap.SUBJECT)) notSubject++
+        }
+        println("focus: points=${map.size} far=$far notSubject=$notSubject extent=%.2f fill=%.2f inside=${fusion.subject.inside}".format(fusion.subject.extent, fusion.subject.fill))
+        check(far == 0) { "background must be left out in focus mode" }
+        check(notSubject < map.size / 50)
+        check(fusion.subject.extent > 0.5f && fusion.subject.fill > 0.02f)
+    } finally { Opt.focusSubject = oldFocus; Opt.subjRadius = oldRadius }
+}
 }

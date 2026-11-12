@@ -31,12 +31,32 @@ Serve *Google Play Services per AR* (ARCore): se manca, l'app propone di install
 | Aula virtuale | L'IA (o le regole apprese, se non c'è un modello) ripulisce e ricostruisce la scena passo passo, spiegando cosa fa. |
 | Memoria | `Download/CloudyScanner/knowledge.json`: note brevi scritte dall'IA, scelte abituali e tempi di fusione. Cresce fino a 48 note e viene riusata nei prompt e nei valori predefiniti. |
 
+## Lavorare su un oggetto (menu "Oggetto ▾")
+
+Tocca l'oggetto nella vista AR per selezionarlo. Da quel momento:
+
+| Funzione | Come è fatta |
+|---|---|
+| Priorità all'oggetto | Vengono fusi solo i pixel di profondità dell'oggetto; il resto dell'inquadratura è ignorato. |
+| Elimina il superfluo | Tutti i punti mai osservati come parte dell'oggetto diventano viola e, alla conferma, vengono cancellati (con annulla). |
+| Foto automatiche | Lo spazio attorno all'oggetto è diviso in viste (davanti, dietro, lati, sopra…). Ogni vista tiene solo la foto migliore; quelle mosse (velocità di rotazione × tempo di posa), poco nitide (varianza del Laplaciano) o doppie sono scartate. Le foto stanno nella cache dell'app con posa e parametri ottici. |
+| Quante viste | Semplice 3, Media 5, Complessa 13. Lo decide la forma (distribuzione delle normali) o l'IA quando riconosce l'oggetto; si può fissare a mano. |
+| Distanza e prospettiva | L'app calcola la distanza ideale dall'ingombro dell'oggetto e dal campo visivo, e dice dove spostarsi per la vista che manca. Il cerchio in basso a destra mostra le viste coperte. |
+| Ricolora dalle foto | Ogni punto prende il colore dalla foto che lo vede più di fronte e da più vicino. |
+| 256 colori | Palette a 256 colori (median cut) calcolata sull'oggetto e applicata solo a lui. |
+| Analizza l'oggetto | Ingombro in cm, punti, forma, colori dominanti, viste mancanti; con il modello IA anche nome, materiali e consigli, da un mosaico delle foto migliori. |
+| IA live | Ogni pochi secondi il modello guarda l'inquadratura (ritagliata sull'oggetto), dice cosa vede e, se non è sicuro, chiede cosa mostrargli. |
+
 ## Limiti da conoscere
 
 - Il Pixel 7 Pro non ha un sensore di profondità (ToF/LiDAR) accessibile alle app: la profondità è
   stimata da ARCore dal movimento. La precisione tipica è di qualche centimetro a 1–2 m.
 - Il laser del telefono serve all'autofocus; Android espone solo la distanza di fuoco risultante.
 - La "memoria" dell'IA è un taccuino riusato nei prompt, non un riaddestramento del modello.
+- "IA live" non è video in tempo reale: è uno sguardo ogni pochi secondi, quanto il telefono riesce a far girare il modello.
+- Le foto migliorano colore, riconoscimento ed esportazione (con pose, per fotogrammetria esterna); la geometria resta quella
+  della profondità ARCore.
+- Nel ricolorare, l'occlusione è stimata solo dall'orientamento della superficie.
 
 ## Sviluppo
 

@@ -8,6 +8,9 @@ import android.graphics.Typeface
 import android.view.View
 import com.frak89.cloudyscanner.Opt
 import com.frak89.cloudyscanner.gl.HudState
+import android.graphics.RectF
+import com.frak89.cloudyscanner.scan.PhotoPlanner
+import com.frak89.cloudyscanner.scan.PhotoStore
 import com.frak89.cloudyscanner.scan.ScanEngine
 import java.util.Locale
 import kotlin.math.abs
@@ -17,7 +20,11 @@ import kotlin.math.min
 import kotlin.math.sin
 
 /** 2D overlay: reticle, subject bracket, "come back here" marker and the erase brush. */
-class HudView(ctx: Context, private val hud: HudState, private val engine: ScanEngine) : View(ctx) {
+class HudView(
+    ctx: Context, private val hud: HudState, private val engine: ScanEngine,
+    private val planner: PhotoPlanner, private val photos: PhotoStore,
+) : View(ctx) {
+    private val arc = RectF()
     private val d = resources.displayMetrics.density
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2f * d }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
@@ -55,6 +62,39 @@ class HudView(ctx: Context, private val hud: HudState, private val engine: ScanE
             val label = String.format(Locale.US, "%.2f m", s.distance) +
                 (if (moving) "  · IN MOVIMENTO" else if (s.locked) "  · AGGANCIATO" else "")
             c.drawText(label, x - text.measureText(label) / 2, y + b + 18f * d, text)
+            val name = hud.objLabel
+            if (name.isNotEmpty()) {
+                text.color = 0xFFFFFFFF.toInt()
+                c.drawText(name, x - text.measureText(name) / 2, y - b - 10f * d, text)
+            }
+        }
+
+        // Photo coverage, seen from above: the subject in the middle, one arc per viewpoint
+        // (green once photographed), the white dot is where the phone is now.
+        if (s.locked && (Opt.photoAuto || planner.count() > 0)) {
+            val cx = w - insetRight - 62f * d; val cy = h - insetBottom - 128f * d
+            val slots = planner.slots
+            fill.color = 0x99191B22.toInt()
+            c.drawCircle(cx, cy, 50f * d, fill)
+            for ((i, sl) in slots.withIndex()) {
+                val done = planner.covered(i)
+                val col = if (done) 0xFF5CE08A.toInt() else 0x66FFFFFF
+                if (sl.azTol >= 180f) { fill.color = col; c.drawCircle(cx, cy, 7f * d, fill); continue }
+                val r = (if (sl.elMin >= 25f) 24f else 38f) * d
+                stroke.color = col; stroke.strokeWidth = 6f * d
+                arc.set(cx - r, cy - r, cx + r, cy + r)
+                val gap = if (sl.azTol > 30f) 8f else 5f
+                c.drawArc(arc, 90f - sl.az - sl.azTol + gap / 2, 2 * sl.azTol - gap, false, stroke)
+            }
+            if (photos.liveValid) {
+                val a = Math.toRadians((90f - photos.live[0]).toDouble())
+                val r = (if (photos.live[1] > 55f) 8f else if (photos.live[1] > 28f) 24f else 38f) * d
+                fill.color = 0xFFFFFFFF.toInt()
+                c.drawCircle(cx + cos(a).toFloat() * r, cy + sin(a).toFloat() * r, 4.5f * d, fill)
+            }
+            text.color = 0xFFE8EAF0.toInt()
+            val lab = "Foto ${planner.coveredCount()}/${slots.size}"
+            c.drawText(lab, cx - text.measureText(lab) / 2, cy + 68f * d, text)
         }
 
         if (hud.guideActive) {

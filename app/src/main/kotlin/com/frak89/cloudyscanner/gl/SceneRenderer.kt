@@ -32,6 +32,8 @@ class HudState {
     @Volatile var subjY = 0f
     @Volatile var fps = 0f
     @Volatile var points = 0
+    /** "tavolo · 82%" once the AI has recognised the subject. */
+    @Volatile var objLabel = ""
 }
 
 /** Mesh buffers prepared off the GL thread, ready to hand to the GPU. */
@@ -84,6 +86,9 @@ class SceneRenderer(
     @Volatile private var revealStartNs = 0L
     @Volatile var revealSeconds = 0f
     @Volatile var snapshotRequest: ((ByteArray?) -> Unit)? = null
+    /** When set, points are drawn in this reduced palette (256-colour view). */
+    @Volatile var palette: com.frak89.cloudyscanner.core.Palette? = null
+    @Volatile var paletteSubjectOnly = false
 
     private var bgProg = 0; private var ptProg = 0; private var meshProg = 0; private var lineProg = 0
     private var camTex = 0
@@ -320,7 +325,7 @@ class SceneRenderer(
             if (ptCpu.capacity() < need) {
                 ptCpu = ByteBuffer.allocateDirect(need + need / 2).order(ByteOrder.nativeOrder())
             }
-            ptCount = map.writeRenderBuffer(ptCpu)
+            ptCount = map.writeRenderBuffer(ptCpu, palette, paletteSubjectOnly)
             uploadedVersion = map.version
             if (now - lastBoundsNs > 700_000_000L) { hasBounds = map.bounds(sceneBounds); lastBoundsNs = now }
         } finally { map.lock.unlock() }
