@@ -42,13 +42,33 @@ class PointMap(val voxel: Float = 0.015f, val maxPoints: Int = 1_500_000) {
 
     fun indexOf(key: Long): Int = index.get(key)
 
-    /** Fuses one observation. [w] in 0..1 is its reliability. Returns the point index or -1 when full. */
+    /**
+     * Fuses one observation. [w] in 0..1 is its reliability; [boost] scales how much confidence it
+     * adds (far away one depth pixel covers several voxels, so each voxel is hit less often).
+     * Returns the point index or -1 when full.
+     */
     fun insert(
         x: Float, y: Float, z: Float, nx: Float, ny: Float, nz: Float,
-        color: Int, w: Float, subject: Boolean, frame: Int,
+        color: Int, w: Float, subject: Boolean, frame: Int, boost: Float = 1f,
     ): Int {
         val key = keyOf(x, y, z)
         var i = index.get(key)
+        if (i < 0) {
+            // Depth noise scatters a surface over a few voxels along its normal. If this surface
+            // already has a sample just in front or behind, refine that one instead of thickening
+            // the shell. Opposite-facing samples (the other side of a thin object) are left alone.
+            var k = 1
+            while (k <= SNAP_VOXELS && i < 0) {
+                val s = voxel * k
+                var j = index.get(keyOf(x + nx * s, y + ny * s, z + nz * s))
+                if (j < 0 || nrm[j * 3] * nx + nrm[j * 3 + 1] * ny + nrm[j * 3 + 2] * nz < 0.5f) {
+                    j = index.get(keyOf(x - nx * s, y - ny * s, z - nz * s))
+                    if (j >= 0 && nrm[j * 3] * nx + nrm[j * 3 + 1] * ny + nrm[j * 3 + 2] * nz < 0.5f) j = -1
+                }
+                if (j >= 0) i = j
+                k++
+            }
+        }
         if (i < 0) {
             if (size >= maxPoints) return -1
             i = size
@@ -58,7 +78,7 @@ class PointMap(val voxel: Float = 0.015f, val maxPoints: Int = 1_500_000) {
             pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z
             nrm[i * 3] = nx; nrm[i * 3 + 1] = ny; nrm[i * 3 + 2] = nz
             col[i] = color
-            conf[i] = min(1f, CONF_GAIN * w)
+            conf[i] = min(1f, CONF_GAIN * w * boost)
             wsum[i] = w
             flags[i] = if (subject) SUBJECT else 0
             seen[i] = frame
@@ -70,7 +90,7 @@ class PointMap(val voxel: Float = 0.015f, val maxPoints: Int = 1_500_000) {
             pos[p] += (x - pos[p]) * t; pos[p + 1] += (y - pos[p + 1]) * t; pos[p + 2] += (z - pos[p + 2]) * t
             nrm[p] += (nx - nrm[p]) * t; nrm[p + 1] += (ny - nrm[p + 1]) * t; nrm[p + 2] += (nz - nrm[p + 2]) * t
             col[i] = lerpColor(col[i], color, t)
-            conf[i] = min(1f, conf[i] + CONF_GAIN * w)
+            conf[i] = min(1f, conf[i] + CONF_GAIN * w * boost)
             // Capped weight: old data fades, so the map follows things that move.
             wsum[i] = min(ws + w, MAX_WEIGHT)
             val f = flags[i].toInt()
@@ -185,6 +205,7 @@ class PointMap(val voxel: Float = 0.015f, val maxPoints: Int = 1_500_000) {
         const val UNCERTAIN: Byte = 4
         const val CONF_GAIN = 0.16f
         const val MAX_WEIGHT = 12f
+        const val SNAP_VOXELS = 2
 
         fun lerpColor(a: Int, b: Int, t: Float): Int {
             val ar = (a shr 16) and 255; val ag = (a shr 8) and 255; val ab = a and 255

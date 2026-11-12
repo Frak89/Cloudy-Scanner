@@ -693,6 +693,7 @@ class MainActivity : Activity(), Director.Ui {
             if (engine.focalLength > 0f) sb.append(String.format(Locale.US, "   %.1f mm f/%.2f ISO %d", engine.focalLength, engine.aperture, engine.iso))
             sb.append('\n')
             sb.append("Incerti ${fmt(engine.uncertainCount)} · ripassati ${engine.guidance.resolved} · ${engine.trackingText}")
+            if (engine.lastError.isNotEmpty()) sb.append("\n! ").append(engine.lastError)
             stats.text = sb
 
             val msg = when {

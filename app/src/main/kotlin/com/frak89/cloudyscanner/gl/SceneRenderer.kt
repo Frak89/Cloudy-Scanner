@@ -326,8 +326,9 @@ class SceneRenderer(
         } finally { map.lock.unlock() }
         lastUploadNs = now
         hud.points = ptCount
+        if (ptCount == 0) return
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, ptBuf)
-        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, max(4, ptCount * PointMap.STRIDE), ptCpu, GLES30.GL_DYNAMIC_DRAW)
+        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, ptCount * PointMap.STRIDE, ptCpu, GLES30.GL_DYNAMIC_DRAW)
     }
 
     private fun uploadMesh(now: Long) {
@@ -335,17 +336,18 @@ class SceneRenderer(
         val m = pendingMesh ?: return
         pendingMesh = null
         lastMeshCpu = m
+        if (m.vertexCount == 0 || m.tris.limit() == 0) { hasMesh = false; return }
         m.vertices.position(0); m.tris.position(0); m.wireQuads.position(0); m.wireTris.position(0)
         GLES30.glBindVertexArray(0)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, meshBuf)
-        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, m.vertices.capacity(), m.vertices, GLES30.GL_STATIC_DRAW)
+        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, m.vertices.limit(), m.vertices, GLES30.GL_STATIC_DRAW)
         triCount = m.tris.limit(); wqCount = m.wireQuads.limit(); wtCount = m.wireTris.limit()
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, triIbo)
-        GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, max(4, triCount * 4), m.tris, GLES30.GL_STATIC_DRAW)
+        GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, triCount * 4, m.tris, GLES30.GL_STATIC_DRAW)
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, wqIbo)
-        GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, max(4, wqCount * 4), m.wireQuads, GLES30.GL_STATIC_DRAW)
+        GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, wqCount * 4, m.wireQuads, GLES30.GL_STATIC_DRAW)
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, wtIbo)
-        GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, max(4, wtCount * 4), m.wireTris, GLES30.GL_STATIC_DRAW)
+        GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, wtCount * 4, m.wireTris, GLES30.GL_STATIC_DRAW)
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
         hasMesh = triCount > 0
         revealStartNs = if (revealSeconds > 0f) now else 0L
