@@ -45,8 +45,54 @@ class MeshData(
             t[o] = a; t[o + 1] = b; t[o + 2] = c; o += 3
             if (c != d) { t[o] = a; t[o + 1] = c; t[o + 2] = d; o += 3 }
         }
-        for (g in ngons) for (k in 1 until g.size - 1) { t[o] = g[0]; t[o + 1] = g[k]; t[o + 2] = g[k + 1]; o += 3 }
+        for (g in ngons) { val tri = earClip(g); System.arraycopy(tri, 0, t, o, tri.size); o += tri.size }
         return t
+    }
+
+    /**
+     * Triangulates one flat n-gon, concave ones included (ear clipping in the polygon's own
+     * plane). Keeps the n-gon's winding, so the triangles face the same way.
+     */
+    fun earClip(g: IntArray): IntArray {
+        val n = g.size
+        val out = IntArray((n - 2) * 3)
+        if (n == 3) { out[0] = g[0]; out[1] = g[1]; out[2] = g[2]; return out }
+        // Newell normal, then drop its largest axis to work in 2D.
+        var nx = 0f; var ny = 0f; var nz = 0f
+        for (i in 0 until n) {
+            val a = g[i] * 3; val b = g[(i + 1) % n] * 3
+            nx += (pos[a + 1] - pos[b + 1]) * (pos[a + 2] + pos[b + 2])
+            ny += (pos[a + 2] - pos[b + 2]) * (pos[a] + pos[b])
+            nz += (pos[a] - pos[b]) * (pos[a + 1] + pos[b + 1])
+        }
+        val ax = kotlin.math.abs(nx); val ay = kotlin.math.abs(ny); val az = kotlin.math.abs(nz)
+        val ia: Int; val ib: Int; val sgn: Float
+        if (ax >= ay && ax >= az) { ia = 1; ib = 2; sgn = if (nx >= 0) 1f else -1f }
+        else if (ay >= az) { ia = 2; ib = 0; sgn = if (ny >= 0) 1f else -1f }
+        else { ia = 0; ib = 1; sgn = if (nz >= 0) 1f else -1f }
+        val px = FloatArray(n) { pos[g[it] * 3 + ia] }; val py = FloatArray(n) { pos[g[it] * 3 + ib] * sgn }
+        val idx = ArrayList<Int>(n); for (i in 0 until n) idx.add(i)
+        var o = 0
+        fun cross(a: Int, b: Int, c: Int) = (px[b] - px[a]) * (py[c] - py[a]) - (py[b] - py[a]) * (px[c] - px[a])
+        var guard = 0
+        while (idx.size > 3 && guard++ < n * n) {
+            var clipped = false
+            for (k in idx.indices) {
+                val a = idx[(k + idx.size - 1) % idx.size]; val b = idx[k]; val c = idx[(k + 1) % idx.size]
+                if (cross(a, b, c) <= 1e-12f) continue                       // reflex corner
+                var inside = false
+                for (q in idx) {
+                    if (q == a || q == b || q == c) continue
+                    if (cross(a, b, q) >= 0f && cross(b, c, q) >= 0f && cross(c, a, q) >= 0f) { inside = true; break }
+                }
+                if (inside) continue
+                out[o] = g[a]; out[o + 1] = g[b]; out[o + 2] = g[c]; o += 3
+                idx.removeAt(k); clipped = true; break
+            }
+            if (!clipped) break                                                // degenerate: fan the rest
+        }
+        for (k in 1 until idx.size - 1) { if (o + 3 > out.size) break; out[o] = g[idx[0]]; out[o + 1] = g[idx[k]]; out[o + 2] = g[idx[k + 1]]; o += 3 }
+        return out
     }
 
     /** Line list of face outlines; with [diagonals] the triangle split edge is added too. */

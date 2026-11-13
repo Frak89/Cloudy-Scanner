@@ -89,6 +89,8 @@ class ScanEngine(private val activity: Activity, val map: PointMap) {
 
     /** Set to receive one JPEG of the next camera image (called on the GL thread). */
     @Volatile var jpegRequest: ((ByteArray?) -> Unit)? = null
+    /** Set to receive the next tracked camera image with its pose and intrinsics (GL thread). */
+    @Volatile var posedRequest: ((com.frak89.cloudyscanner.ai.PosedImage?) -> Unit)? = null
 
     // ---------------------------------------------------------------- lifecycle (UI thread)
 
@@ -184,6 +186,12 @@ class ScanEngine(private val activity: Activity, val map: PointMap) {
             jpegRequest?.let { cb -> jpegRequest = null; cb(captureJpeg(frame)) }
             if (!tracking) return true
             cam.pose.toMatrix(poseM, 0)
+            posedRequest?.let { cb ->
+                posedRequest = null
+                val ii = cam.imageIntrinsics; val dim = ii.imageDimensions
+                cb(com.frak89.cloudyscanner.ai.PosedImage(captureJpeg(frame), null, poseM.copyOf(),
+                    floatArrayOf(ii.focalLength[0], ii.focalLength[1], ii.principalPoint[0], ii.principalPoint[1], dim[0].toFloat(), dim[1].toFloat()), rotation))
+            }
 
             var newDepth = false
             if (depthSupported) {

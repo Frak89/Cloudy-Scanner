@@ -71,7 +71,7 @@ class HudView(
 
         // Photo coverage, seen from above: the subject in the middle, one arc per viewpoint
         // (green once photographed), the white dot is where the phone is now.
-        if (s.locked && (Opt.photoAuto || planner.count() > 0)) {
+        if ((s.locked || photos.liveValid) && (Opt.photoAuto || planner.count() > 0)) {
             val cx = w - insetRight - 62f * d; val cy = h - insetBottom - 128f * d
             val slots = planner.slots
             fill.color = 0x99191B22.toInt()

@@ -76,9 +76,34 @@ object Storage {
     }
 
     /** Wavefront OBJ with vertex colours; faces as quads or split into triangles. */
+    /** The object catalogue as CSV (opens in any spreadsheet). */
+    fun exportCatalog(ctx: Context, parts: List<com.frak89.cloudyscanner.core.CatalogPart>, shots: List<com.frak89.cloudyscanner.scan.Shot>): File {
+        val f = File(appDir(ctx), "catalogo_${stamp()}.csv")
+        f.bufferedWriter().use { w ->
+            w.write("nome;riconosciuto;tipo;misure;colore;x_m;y_m;z_m;foto;lati_su_8;note\n")
+            for (p in parts) {
+                val c = com.frak89.cloudyscanner.ai.ObjectCrops.coverage(p, shots)
+                w.write(String.format(Locale.US, "%s;%s;%s;%s;#%06X;%.3f;%.3f;%.3f;%d;%d;%s\n", p.name, if (p.labelled) "si" else "no", p.kind, p.dims,
+                    p.color and 0xFFFFFF, p.center[0], p.center[1], p.center[2], c[0], c[1], p.note.replace(';', ',')))
+            }
+        }
+        return f
+    }
+
     fun exportObj(ctx: Context, m: MeshData, asQuads: Boolean): File {
         val f = File(appDir(ctx), "mesh_${stamp()}_${if (asQuads) "quads" else "tris"}.obj")
+        val mtl = if (m.groups.isEmpty()) null else File(f.parentFile, f.nameWithoutExtension + ".mtl")
+        if (mtl != null) mtl.bufferedWriter().use { w ->
+            // One material per object, in its dominant colour: Blender shows it straight away.
+            for (gr in m.groups) {
+                val v = if (gr.faceEnd > gr.faceStart) m.quads[gr.faceStart * 4] else if (gr.ngonEnd > gr.ngonStart) m.ngons[gr.ngonStart][0] else continue
+                val c = m.col[v]
+                w.write(String.format(Locale.US, "newmtl M_%s\nKd %.3f %.3f %.3f\nKa 0 0 0\nKs 0.05 0.05 0.05\nd 1\nillum 2\n\n", gr.name,
+                    ((c shr 16) and 255) / 255f, ((c shr 8) and 255) / 255f, (c and 255) / 255f))
+            }
+        }
         f.bufferedWriter().use { w ->
+            if (mtl != null) w.write("mtllib ${mtl.name}\n")
             w.write("# Cloudy Scanner - ${m.vertexCount} vertices, ${m.quadCount} quads, ${m.ngonCount} n-gons, ${m.triangleCount} triangles\n")
             for (v in 0 until m.vertexCount) {
                 val c = m.col[v]
@@ -105,7 +130,7 @@ object Storage {
                 for (g in m.ngons) ngon(g)
             } else for (gr in m.groups) {
                 // One named object per solid, flat-shaded.
-                w.write("o ${gr.name}\ns off\n")
+                w.write("o ${gr.name}\nusemtl M_${gr.name}\ns off\n")
                 for (q in gr.faceStart until gr.faceEnd) face(q)
                 for (k in gr.ngonStart until gr.ngonEnd) ngon(m.ngons[k])
             }

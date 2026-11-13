@@ -64,7 +64,22 @@ viene ricostruita come la modellerebbe una persona in Blender:
   (dichiarati come non misurati);
 - il resto può restare come mesh normale ("Tieni i dettagli irregolari"), così non si perde nulla.
 
-L'OBJ esportato ha un oggetto con nome per ogni solido, quads e N-goni, ombreggiatura piatta: si importa in Blender così com'è.
+L'OBJ esportato ha un oggetto con nome per ogni solido, quads e N-goni, ombreggiatura piatta e un materiale per oggetto nel suo colore dominante (file .mtl accanto): si importa in Blender così com'è.
+
+### Oggetti separati e catalogo (v1.4)
+
+- La scena viene divisa in **oggetti**: un tavolino diventa piano, gambe divergenti e coniche, tovaglietta (disco sottile),
+  piatto e candela, ognuno col suo nome. Le pile di oggetti tondi (candela su piatto su tovaglietta) vengono tagliate dove
+  cambiano raggio, colore o spessore. Le forme verticali non tonde (una barra a V su una base) diventano **prismi estrusi**
+  dal loro contorno; un oggetto tornito in due colori (una clessidra) resta un solo oggetto con due fasce di colore.
+- Ogni oggetto prende il **colore dominante** delle sue superfici. LOW = pochi lati e profili dritti; HIGH = più lati e
+  profili curvi e smussati.
+- **Mesh ▾ → Catalogo oggetti**: nome, misure, colore, quante foto lo inquadrano e da quanti lati. Si può rinominare un
+  oggetto o farlo **riconoscere all'IA**: ritaglia l'oggetto dalla foto migliore e chiede al modello che cos'è. Il nome
+  cambia la forma: *piatto*, *ciotola*, *barattolo*, *vaso* diventano cavi; *candela* ha l'incavo dello stoppino;
+  *lattina* bordo e coperchio. L'IA live dà il nome all'oggetto selezionato da sola. Il catalogo si esporta in CSV.
+- **Foto automatiche anche senza oggetto selezionato**: il pianificatore inquadra tutta la scena e chiede le viste che
+  mancano, scartando quelle mosse o doppie.
 
 ## Forme regolari in NURBS (Mesh ▾ → Ricostruisci NURBS)
 

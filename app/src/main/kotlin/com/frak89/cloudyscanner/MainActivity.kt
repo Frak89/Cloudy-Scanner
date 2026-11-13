@@ -24,6 +24,7 @@ import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.WindowInsets
 import android.view.WindowManager
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
@@ -37,9 +38,13 @@ import com.frak89.cloudyscanner.ai.Director
 import com.frak89.cloudyscanner.ai.KnowledgeBuffer
 import com.frak89.cloudyscanner.ai.LiveVision
 import com.frak89.cloudyscanner.ai.LocalAi
+import com.frak89.cloudyscanner.ai.ObjectCrops
+import com.frak89.cloudyscanner.ai.PosedImage
 import com.frak89.cloudyscanner.ai.Recognition
 import com.frak89.cloudyscanner.ai.VisionParse
+import com.frak89.cloudyscanner.core.CatalogPart
 import com.frak89.cloudyscanner.core.Palette
+import com.frak89.cloudyscanner.core.PartLabel
 import com.frak89.cloudyscanner.core.PointMap
 import com.frak89.cloudyscanner.gl.HudState
 import com.frak89.cloudyscanner.gl.SceneRenderer
@@ -536,7 +541,12 @@ class MainActivity : Activity(), Director.Ui {
                     Toast.makeText(this, "NURBS: " + meshes.nurbsInfo, Toast.LENGTH_LONG).show()
                 } else if (m != null) {
                     val counts = "${fmt(m.vertexCount)} vertici · ${fmt(m.quadCount)} quads" + (if (m.ngonCount > 0) " · ${m.ngonCount} n-goni" else "") + " · ${fmt(m.triangleCount)} triangoli"
-                    if (Opt.smart) { aiLog.append("\n\nModello pulito ${Opt.levelName[level]}: ${meshes.nurbsInfo}\n$counts"); Toast.makeText(this, meshes.nurbsInfo, Toast.LENGTH_LONG).show() }
+                    if (Opt.smart) {
+                        aiLog.append("\n\nModello pulito ${Opt.levelName[level]}: ${meshes.nurbsInfo}\n$counts")
+                        val cat = meshes.catalog.filter { c -> c.kind != "face" }
+                        if (cat.isNotEmpty()) aiLog.append("\nCatalogo: " + cat.joinToString(" · ") { c -> c.name } + "\n(menu Mesh → Catalogo oggetti per rinominarli o farli riconoscere all'IA)")
+                        Toast.makeText(this, meshes.nurbsInfo, Toast.LENGTH_LONG).show()
+                    }
                     else toast("${Opt.levelName[level]}: $counts")
                 }
                 refreshControls()
@@ -554,8 +564,10 @@ class MainActivity : Activity(), Director.Ui {
             "Rimuovi mesh", "Esporta OBJ per Blender (quads e n-goni)", "Esporta OBJ (triangoli)", "Esporta nuvola PLY", "Nuova scansione (azzera tutto)",
         )
         items.forEachIndexed { i, s -> pm.menu.add(0, i, i, s) }
+        pm.menu.add(0, 20, 0, "Catalogo oggetti (nomi, misure, colori, IA)")
         pm.setOnMenuItemClickListener {
             when (it.itemId) {
+                20 -> showCatalog()
                 0, 1, 2 -> rebuild(it.itemId)
                 3 -> rebuild(Opt.LEVEL_NURBS)
                 4 -> export { val n = meshes.nurbs; if (n.isNullOrEmpty()) null else Storage.exportIges(this, n) }
@@ -567,7 +579,7 @@ class MainActivity : Activity(), Director.Ui {
                     try { if (map.size == 0) null else Storage.exportPly(this, map) } finally { map.lock.unlock() }
                 }
                 10 -> AlertDialog.Builder(this).setMessage("Cancellare punti e mesh della scansione corrente?")
-                    .setPositiveButton("Azzera") { _, _ -> engine.reset(); meshes.clear(); updateEraseCount(); refreshControls() }
+                    .setPositiveButton("Azzera") { _, _ -> engine.reset(); meshes.clear(); Opt.labels = emptyList(); photos.sceneTarget = null; updateEraseCount(); refreshControls() }
                     .setNegativeButton("Annulla", null).show()
             }
             true
@@ -874,6 +886,10 @@ class MainActivity : Activity(), Director.Ui {
         val before = hud.objLabel
         hud.objLabel = if (r.known) "${r.name} · ${r.confidence}%" else ""
         if (r.level >= 0) { aiLevelKnown = true; photos.delete(planner.setLevel(r.level, false)) }
+        if (r.known && r.confidence >= 60 && engine.subject.valid && engine.subject.locked) {
+            val s = engine.subject
+            putLabel(s.x, s.y, s.z, r.name.lowercase(Locale.ITALIAN))
+        }
         if (r.known && r.confidence >= 60 && !r.name.equals(Opt.objectHint, true)) {
             // AI boost: knowing what the object is lets the clean model add what such objects always have.
             Opt.objectHint = r.name
@@ -942,6 +958,140 @@ class MainActivity : Activity(), Director.Ui {
             } catch (t: Throwable) {
                 stream(null); say("Analisi non riuscita: ${t.message ?: t.javaClass.simpleName}")
             } finally { finished() }
+        }
+    }
+
+    // ------------------------------------------------------------------ catalogue
+
+    private var sceneTargetAt = 0L
+
+    /** Without a selected object, auto photos aim at the scanned scene (robust centre and size). */
+    private fun updateSceneTarget() {
+        if (engine.subject.locked) return
+        val now = System.currentTimeMillis()
+        if (now - sceneTargetAt < 2000) return
+        sceneTargetAt = now
+        if (!map.lock.tryLock()) return
+        try {
+            val n = map.size
+            if (n < 2000) { photos.sceneTarget = null; return }
+            val step = (n / 3000).coerceAtLeast(1)
+            val m = n / step
+            val xs = FloatArray(m); val ys = FloatArray(m); val zs = FloatArray(m)
+            for (k in 0 until m) { val o = k * step * 3; xs[k] = map.pos[o]; ys[k] = map.pos[o + 1]; zs[k] = map.pos[o + 2] }
+            xs.sort(); ys.sort(); zs.sort()
+            val lo = m / 20; val hi = m - 1 - m / 20
+            val ex = xs[hi] - xs[lo]; val ey = ys[hi] - ys[lo]; val ez = zs[hi] - zs[lo]
+            photos.sceneTarget = floatArrayOf((xs[lo] + xs[hi]) / 2, (ys[lo] + ys[hi]) / 2, (zs[lo] + zs[hi]) / 2,
+                kotlin.math.sqrt(ex * ex + ey * ey + ez * ez).coerceIn(0.2f, 4f))
+        } finally { map.lock.unlock() }
+    }
+
+    /** Names the object nearest to a point (replacing an older name at the same spot) and rebuilds the clean model. */
+    private fun putLabel(x: Float, y: Float, z: Float, name: String, rebuild: Boolean = false) {
+        val keep = Opt.labels.filter { val dx = it.x - x; val dy = it.y - y; val dz = it.z - z; dx * dx + dy * dy + dz * dz > 0.05f * 0.05f }
+        Opt.labels = keep + PartLabel(x, y, z, name)
+        if (rebuild) rebuildIfShown()
+    }
+
+    private fun colorName(c: Int): String {
+        return String.format(Locale.US, "#%06X", c and 0xFFFFFF)
+    }
+
+    private fun showCatalog() {
+        val cat = meshes.catalog
+        if (cat.isEmpty()) {
+            toast(if (Opt.smart) "Ricostruisci prima un modello (LOW, MID o HIGH)" else "Attiva «Modello pulito» e ricostruisci: il catalogo nasce dal modello pulito")
+            return
+        }
+        val shots = planner.shots()
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 12, 24, 12) }
+        val dlg = AlertDialog.Builder(this).setTitle("Catalogo · ${cat.size} oggetti")
+            .setView(ScrollView(this).apply { addView(list) })
+            .setPositiveButton("Riconosci tutti con IA") { _, _ -> recogniseParts(cat.filter { it.kind != "face" }) }
+            .setNeutralButton("Esporta") { _, _ -> export { Storage.exportCatalog(this, cat, shots) } }
+            .setNegativeButton("Chiudi", null).create()
+        for (p in cat) {
+            val cov = ObjectCrops.coverage(p, shots)
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 14, 0, 14); gravity = android.view.Gravity.CENTER_VERTICAL }
+            row.addView(View(this).apply { setBackgroundColor(p.color or (0xFF shl 24)) }, LinearLayout.LayoutParams(56, 56).apply { rightMargin = 24 })
+            val tv = TextView(this).apply {
+                setTextColor(0xFFEEEEEE.toInt()); textSize = 14f
+                text = "${p.name}${if (p.labelled) "  ✓IA" else ""}\n${p.dims} · ${colorName(p.color)}" +
+                    (if (p.note.isNotEmpty()) "\n${p.note}" else "") +
+                    "\nFoto ${cov[0]} · lati ${cov[1]}/8" + (if (cov[2] > 0) " · dall'alto" else "") +
+                    (if (cov[0] == 0) "  → fotografalo" else if (cov[1] < 3) "  → mancano lati" else "")
+            }
+            row.addView(tv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.setOnClickListener {
+                AlertDialog.Builder(this).setTitle(p.name)
+                    .setItems(arrayOf("Rinomina (es. piatto, candela, barattolo…)", "Riconosci con IA")) { _, w ->
+                        if (w == 0) renamePart(p) else { dlg.dismiss(); recogniseParts(listOf(p)) }
+                    }.show()
+            }
+            list.addView(row)
+        }
+        dlg.show()
+    }
+
+    private fun renamePart(p: CatalogPart) {
+        val ed = EditText(this).apply { setText(if (p.labelled) p.name else ""); hint = "nome dell'oggetto" }
+        AlertDialog.Builder(this).setTitle("Che cos'è?").setView(ed)
+            .setPositiveButton("OK") { _, _ ->
+                val n = ed.text.toString().trim().lowercase(Locale.ITALIAN)
+                if (n.isNotEmpty()) {
+                    putLabel(p.center[0], p.center[1], p.center[2], n, true)
+                    kb.addNote("Oggetto «$n»: ${p.dims}, colore ${colorName(p.color)}."); kb.save()
+                    toast("«$n»: rifaccio il modello con la forma tipica")
+                }
+            }.setNegativeButton("Annulla", null).show()
+    }
+
+    /** One posed camera frame from the live view (for objects no stored photo shows). */
+    private fun grabPosed(): PosedImage? {
+        val latch = CountDownLatch(1)
+        var out: PosedImage? = null
+        engine.posedRequest = { out = it; latch.countDown() }
+        if (!latch.await(2, TimeUnit.SECONDS)) { engine.posedRequest = null; return null }
+        return out
+    }
+
+    /** Shows each object, cut out of the best photo, to the AI and uses the answer as its name. */
+    private fun recogniseParts(parts: List<CatalogPart>) {
+        if (parts.isEmpty()) return
+        if (aiBusy || director.running) { toast("L'IA sta già lavorando"); return }
+        aiBusy = true
+        thread(name = "ai-catalog") {
+            try {
+                if (!(ai.state == LocalAi.State.READY || ai.autoSelect())) { say("Per riconoscere gli oggetti serve il modello IA: tocca «Modello»."); return@thread }
+                stream(ai.status)
+                if (!ai.ensureLoaded()) { stream(null); say(ai.status); return@thread }
+                val images = planner.shots().map { ObjectCrops.fromShot(it) }.toMutableList()
+                grabPosed()?.let { if (it.jpeg != null) images.add(it) }
+                var named = 0
+                for ((k, p) in parts.withIndex()) {
+                    stream("Oggetto ${k + 1}/${parts.size}: ${p.name}…")
+                    val crop = ObjectCrops.crop(p, images)
+                    if (crop == null) { say("«${p.name}»: nessuna foto lo inquadra, fotografalo e riprova."); continue }
+                    val prompt = "L'immagine è ritagliata attorno a UN oggetto della scena, al centro. " +
+                        "Dalla scansione 3D: ${p.name}, ${p.dims}, colore dominante ${colorName(p.color)}." +
+                        (if (p.note.isNotEmpty()) " ${p.note}." else "") +
+                        "\nChe oggetto è quello al centro? Rispondi con le righe OGGETTO: e SICUREZZA:, poi una frase."
+                    val text = ai.generate(SYSTEM_OBJECT, prompt, listOf(crop), 120) { stream(it) }
+                    val r = VisionParse.parse(text)
+                    if (r.known && r.confidence >= 40) {
+                        val n = r.name.lowercase(Locale.ITALIAN)
+                        putLabel(p.center[0], p.center[1], p.center[2], n)
+                        kb.addNote("Oggetto «$n»: ${p.dims}, colore ${colorName(p.color)}.")
+                        say("IA: «${p.name}» è «$n» (${r.confidence}%)")
+                        named++
+                    } else say("IA: «${p.name}» non riconosciuto" + (if (r.ask.isNotEmpty()) " — ${r.ask}" else ""))
+                }
+                stream(null)
+                kb.save()
+                if (named > 0) { say("Rifaccio il modello pulito con $named oggetti riconosciuti (forme tipiche: piatti cavi, candele, barattoli…)."); ui.post { rebuildIfShown() } }
+            } catch (t: Throwable) { stream(null); say("Riconoscimento non riuscito: ${t.message ?: t.javaClass.simpleName}") }
+            finally { finished() }
         }
     }
 
@@ -1067,7 +1217,8 @@ class MainActivity : Activity(), Director.Ui {
             if (engine.focalLength > 0f) sb.append(String.format(Locale.US, "   %.1f mm f/%.2f ISO %d", engine.focalLength, engine.aperture, engine.iso))
             sb.append('\n')
             sb.append("Incerti ${fmt(engine.uncertainCount)} · ripassati ${engine.guidance.resolved} · ${engine.trackingText}")
-            if (s.locked) {
+            updateSceneTarget()
+            if (s.locked || (photos.sceneTarget != null && planner.count() > 0)) {
                 sb.append("\nFoto ${planner.coveredCount()}/${planner.slots.size} viste (${PhotoPlanner.LEVEL_NAMES[planner.level].lowercase()})")
                 val rej = planner.rejectedBlur + planner.rejectedSoft
                 if (rej + planner.replaced > 0) sb.append(" · scartate ${planner.rejectedBlur} mosse, ${planner.rejectedSoft} poco nitide · ${planner.replaced} migliorate")

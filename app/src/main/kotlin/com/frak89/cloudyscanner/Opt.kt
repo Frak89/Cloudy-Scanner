@@ -60,6 +60,8 @@ object Opt {
     @Volatile var keepDetails = true
     /** What the AI says the object is; steers typical finishing (e.g. the rim of a can). */
     @Volatile var objectHint = ""
+    /** Names given to objects of the scene (by the AI or by hand), by position. */
+    @Volatile var labels: List<com.frak89.cloudyscanner.core.PartLabel> = emptyList()
 
     // Erase
     @Volatile var eraseMode = false

@@ -40,6 +40,8 @@ class PhotoStore(ctx: Context, val planner: PhotoPlanner, private val subject: S
     /** Live view of the camera around the subject: azimuth, elevation, distance, ideal distance. */
     val live = FloatArray(4)
     @Volatile var liveValid = false
+    /** Without a selected object, photos are planned around the whole scene: centre and size. */
+    @Volatile var sceneTarget: FloatArray? = null
 
     init { dir.listFiles()?.forEach { it.delete() } }
 
@@ -57,21 +59,23 @@ class PhotoStore(ctx: Context, val planner: PhotoPlanner, private val subject: S
             blur = acos(dot) / dt * (j.exposureMs.coerceIn(1f, 66f) / 1000f) * j.imgIntr[0] * 1920f / j.iw.coerceAtLeast(1)
         }
         lastFwd[0] = fx; lastFwd[1] = fy; lastFwd[2] = fz; lastNs = j.timeNs
-        if (!j.hasColor || !s.valid || !s.locked) { liveValid = false; return }
+        val locked = s.valid && s.locked
+        val tgt = if (locked) floatArrayOf(s.x, s.y, s.z, s.extent) else sceneTarget
+        if (!j.hasColor || tgt == null) { liveValid = false; return }
 
-        val v = planner.view(m[12], m[13], m[14], s.x, s.y, s.z)
-        // Distance at which the whole object fills about three quarters of the frame height.
+        val v = planner.view(m[12], m[13], m[14], tgt[0], tgt[1], tgt[2])
+        // Distance at which the whole object (or scene) fills about three quarters of the frame height.
         val half = atan(j.ih / 2f / j.imgIntr[1].coerceAtLeast(1f))
-        val ideal = if (s.extent > 0.05f) (s.extent / 2f) / tan(half) / 0.75f else 0f
+        val ideal = if (tgt[3] > 0.05f) (tgt[3] / 2f) / tan(half) / 0.75f else 0f
         live[0] = v[0]; live[1] = v[1]; live[2] = v[2]; live[3] = ideal
         liveValid = true
 
         val manual = manualRequest
         if (!manual && (!Opt.photoAuto || !j.insert)) return
         if (!manual && j.timeNs - lastShotNs < 400_000_000L) return
-        val r = s.imgRect
+        val r = if (locked) s.imgRect else intArrayOf(j.iw / 5, j.ih / 5, j.iw * 4 / 5, j.ih * 4 / 5)
         val sharp = PhotoPlanner.sharpness(j.yBuf, j.yRow, j.iw, j.ih, r[0], r[1], r[2], r[3])
-        val d = planner.consider(Candidate(v[0], v[1], v[2], sharp, blur, s.fill, s.inside, ideal), manual)
+        val d = planner.consider(Candidate(v[0], v[1], v[2], sharp, blur, if (locked) s.fill else 0.4f, if (locked) s.inside else true, ideal), manual)
         if (!d.accept) {
             if (manual) { manualRequest = false; lastEvent = "Foto scartata: ${d.why}. Tieni fermo e riprova." }
             return

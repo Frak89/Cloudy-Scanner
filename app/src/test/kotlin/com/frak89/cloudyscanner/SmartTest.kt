@@ -86,8 +86,8 @@ class SmartTest {
         val s = build(c, 1, 16)
         println("round table: ${s.info}  V=${s.mesh.vertexCount} Q=${s.mesh.quadCount} Ngon=${s.mesh.ngonCount}")
         val m = s.mesh
-        val table = m.groups.indexOfFirst { it.name.startsWith("Rotazione") }
-        assertEquals("top, leg and foot are one solid", 1, m.groups.count { it.name.startsWith("Rotazione") })
+        val table = s.parts.first { it.kind == "revolution" }.group
+        assertEquals("top, leg and foot are one solid", 1, s.parts.count { it.kind == "revolution" })
         assertTrue(closed(m, table))
         val gr = m.groups[table]
         val vs = HashSet<Int>(); for (f in gr.faceStart until gr.faceEnd) for (k in 0 until 4) vs.add(m.quads[f * 4 + k])
@@ -100,7 +100,7 @@ class SmartTest {
         val radii = vs.map { Math.round(sqrt((m.pos[it * 3] - ax) * (m.pos[it * 3] - ax) + (m.pos[it * 3 + 2] - az) * (m.pos[it * 3 + 2] - az)) * 200f) / 200f }.distinct().sorted()
         println("  ring radii: $radii")
         assertTrue(radii.any { abs(it - 0.45f) < 0.012f } && radii.any { abs(it - 0.05f) < 0.006f } && radii.any { abs(it - 0.025f) < 0.006f })
-        assertTrue("the floor is a single face", m.groups.any { it.name.startsWith("Faccia") && it.faceEnd - it.faceStart == 1 })
+        assertTrue("the floor is a single face", s.parts.any { it.kind == "face" && m.groups[it.group].let { g -> g.faceEnd - g.faceStart } == 1 })
         assertTrue(s.info.contains("allineamenti"))
         assertTrue(m.quadCount < 200)
     }
@@ -127,11 +127,11 @@ class SmartTest {
         val m = s.mesh
         for (gr in m.groups) { val v0 = if (gr.faceEnd > gr.faceStart) m.quads[gr.faceStart * 4] else 0
             println("  ${gr.name}: faces=${gr.faceEnd - gr.faceStart} ngons=${gr.ngonEnd - gr.ngonStart} at (%.2f,%.2f,%.2f)".format(m.pos[v0 * 3], m.pos[v0 * 3 + 1], m.pos[v0 * 3 + 2])) }
-        val slab = m.groups.indexOfFirst { it.name.startsWith("Lastra") }
+        val slab = s.parts.firstOrNull { it.kind == "slab" }?.group ?: -1
         assertTrue("the top is a slab", slab >= 0)
         assertEquals(6, m.groups[slab].faceEnd - m.groups[slab].faceStart); assertTrue(closed(m, slab))
         assertTrue(s.info.contains("lastra 100×60×4 cm"))
-        val legs = m.groups.filter { it.name.startsWith("Rotazione") }
+        val legs = s.parts.filter { it.kind == "revolution" }.map { m.groups[it.group] }
         assertEquals(4, legs.size)
         // Legs: 8-sided, same radius on all four, standing exactly on the floor and reaching the top's underside.
         val rr = ArrayList<Float>()

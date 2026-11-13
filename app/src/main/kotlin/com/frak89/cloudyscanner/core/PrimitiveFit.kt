@@ -34,6 +34,8 @@ class FitResult(val planes: MutableList<FitPlane>, val tubes: MutableList<FitTub
     var col = IntArray(0)
     /** Per point: index of the plane that explains it, [ROUND] for tubes and bends, -1 for none. */
     var owner = IntArray(0)
+    /** Per point: the tube that explains it (null for planes, bends and unexplained points). */
+    var tubeOf: Array<FitTube?> = arrayOf()
 
     val coverage get() = if (total == 0) 0f else explained.toFloat() / total
 
@@ -135,6 +137,7 @@ object PrimitiveFit {
         val total = k
         val alive = BooleanArray(total) { true }
         val owner = IntArray(total) { -1 }
+        val tubeOf = arrayOfNulls<FitTube>(total)
         var aliveCount = total
         val rnd = Random(seed)
         val planes = ArrayList<FitPlane>(); val tubes = ArrayList<FitTube>()
@@ -198,7 +201,7 @@ object PrimitiveFit {
                     val tt = (px[i] - t.a[0]) * t.d[0] + (py[i] - t.a[1]) * t.d[1] + (pz[i] - t.a[2]) * t.d[2]
                     if (tt < t.t0 - 0.01f || tt > t.t1 + 0.01f) continue
                     val rx = px[i] - t.a[0] - t.d[0] * tt; val ry = py[i] - t.a[1] - t.d[1] * tt; val rz = pz[i] - t.a[2] - t.d[2] * tt
-                    if (abs(sqrt(rx * rx + ry * ry + rz * rz) - t.r) < 2.5f * tubeEps(t.r)) { alive[i] = false; aliveCount--; owner[i] = FitResult.ROUND }
+                    if (abs(sqrt(rx * rx + ry * ry + rz * rz) - t.r) < 2.5f * tubeEps(t.r)) { alive[i] = false; aliveCount--; owner[i] = FitResult.ROUND; tubeOf[i] = t }
                 }
                 tubes.addAll(tube); fails = 0
             } else if (plane != null && planeCount >= minInliers) {
@@ -244,7 +247,7 @@ object PrimitiveFit {
             }
         }
         return FitResult(planes, tubes, elbows, total - aliveCount, total).also {
-            it.px = px; it.py = py; it.pz = pz; it.nx = nx; it.ny = ny; it.nz = nz; it.col = col; it.owner = owner
+            it.px = px; it.py = py; it.pz = pz; it.nx = nx; it.ny = ny; it.nz = nz; it.col = col; it.owner = owner; it.tubeOf = tubeOf
         }
     }
 
@@ -614,6 +617,13 @@ object PrimitiveFit {
             keep[kk++] = i
         }
         if (kk < 30) return null
+        // Flat means flat everywhere: on a real plane the normals agree; on a curved patch (a bulb,
+        // a strip along a leg) they swing by tens of degrees.
+        run {
+            var agree = 0.0
+            for (q in 0 until kk) { val i = keep[q]; agree += abs(n[0] * nx[i] + n[1] * ny[i] + n[2] * nz[i]) }
+            if (agree / kk < 0.95) return null
+        }
         // Flatness: on a bulging surface (ball, wide column) the distance from the plane grows with
         // the square of the distance from the middle. Reject patches curved tighter than ~1.5 m.
         run {

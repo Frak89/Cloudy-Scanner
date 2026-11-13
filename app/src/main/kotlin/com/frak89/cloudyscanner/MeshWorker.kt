@@ -23,6 +23,8 @@ class MeshWorker(private val map: PointMap, private val renderer: SceneRenderer)
     /** Exact surfaces behind the current mesh when it was built in NURBS mode. */
     @Volatile var nurbs: List<NurbsSurface>? = null
     @Volatile var nurbsInfo = ""
+    /** Objects of the last clean model, for the catalogue. */
+    @Volatile var catalog: List<com.frak89.cloudyscanner.core.CatalogPart> = emptyList()
     private val exec = Executors.newSingleThreadExecutor { r -> Thread(r, "mesher").apply { priority = Thread.NORM_PRIORITY - 1 } }
     private val gen = AtomicInteger()
 
@@ -77,11 +79,11 @@ class MeshWorker(private val map: PointMap, private val renderer: SceneRenderer)
             progress = 0.2f
             val sel = subject
             val res = SmartModel.build(n, pos, nrm, col, if (sel == null) null else { i -> sel[i] },
-                SmartOptions(lvl, Opt.circleSides, Opt.bevel, Opt.keepDetails, Opt.objectHint)) { gen.get() != g } ?: return null
+                SmartOptions(lvl, Opt.circleSides, Opt.bevel, Opt.keepDetails, Opt.objectHint, Opt.labels)) { gen.get() != g } ?: return null
             if (gen.get() != g) return null
             val gpu = MeshGpu(res.mesh)
             if (gen.get() != g) return null
-            nurbs = res.surfaces; nurbsInfo = res.info
+            nurbs = res.surfaces; nurbsInfo = res.info; catalog = res.parts
             mesh = res.mesh; level = lvl; builtVersion = ver
             lastMs = (System.nanoTime() - t0) / 1e6f
             progress = 1f
@@ -95,7 +97,7 @@ class MeshWorker(private val map: PointMap, private val renderer: SceneRenderer)
         if (gen.get() != g) return null
         val gpu = MeshGpu(m)
         if (gen.get() != g) return null
-        nurbs = null; nurbsInfo = ""
+        nurbs = null; nurbsInfo = ""; catalog = emptyList()
         mesh = m; level = lvl; builtVersion = ver
         lastMs = (System.nanoTime() - t0) / 1e6f
         renderer.forceFlat = false
@@ -106,7 +108,7 @@ class MeshWorker(private val map: PointMap, private val renderer: SceneRenderer)
     fun clear() {
         gen.incrementAndGet()
         busy = false
-        mesh = null; level = -1; nurbs = null; nurbsInfo = ""
+        mesh = null; level = -1; nurbs = null; nurbsInfo = ""; catalog = emptyList()
         renderer.setMesh(null, 0f)
     }
 
