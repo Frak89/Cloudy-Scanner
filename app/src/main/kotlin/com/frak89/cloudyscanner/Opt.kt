@@ -68,6 +68,8 @@ object Opt {
     @Volatile var objectHint = ""
     /** Names given to objects of the scene (by the AI or by hand), by position. */
     @Volatile var labels: List<com.frak89.cloudyscanner.core.PartLabel> = emptyList()
+    /** Outlines of the selected object from many views, snapped to its edges (shape free forms). */
+    @Volatile var silhouettes: List<com.frak89.cloudyscanner.core.Silhouette> = emptyList()
 
     // Erase
     @Volatile var eraseMode = false

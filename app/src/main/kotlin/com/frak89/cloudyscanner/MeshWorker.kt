@@ -79,7 +79,7 @@ class MeshWorker(private val map: PointMap, private val renderer: SceneRenderer)
             progress = 0.2f
             val sel = subject
             val res = SmartModel.build(n, pos, nrm, col, if (sel == null) null else { i -> sel[i] },
-                SmartOptions(lvl, Opt.circleSides, Opt.bevel, Opt.keepDetails, Opt.objectHint, Opt.labels)) { gen.get() != g } ?: return null
+                SmartOptions(lvl, Opt.circleSides, Opt.bevel, Opt.keepDetails, Opt.objectHint, Opt.labels, Opt.silhouettes)) { gen.get() != g } ?: return null
             if (gen.get() != g) return null
             val gpu = MeshGpu(res.mesh)
             if (gen.get() != g) return null

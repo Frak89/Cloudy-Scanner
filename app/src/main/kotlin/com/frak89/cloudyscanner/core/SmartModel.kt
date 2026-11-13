@@ -50,6 +50,8 @@ class SmartOptions(
     val hint: String = "",
     /** Names given to objects (by the AI or by hand); steer each object's typical shape. */
     val labels: List<PartLabel> = emptyList(),
+    /** Outlines of the selected object from several views (snapped to its edges): they shape free forms. */
+    val silhouettes: List<Silhouette> = emptyList(),
 )
 
 class SmartResult(val mesh: MeshData, val surfaces: List<NurbsSurface>, val info: String, val solids: Int, val coverage: Float, val parts: List<CatalogPart> = emptyList())
@@ -998,8 +1000,11 @@ object SmartModel {
      * heights over it in K rings. Mirror-symmetric shapes are made exactly symmetric.
      */
     private class Blob(val cx: Float, val cz: Float, val ux: Float, val uz: Float, val y0: Float,
-                       val rad: FloatArray, val h: Array<FloatArray>, val hc: Float, val color: Int, val sym: Boolean) {
+                       val rad: FloatArray, val h: Array<FloatArray>, var hc: Float, val color: Int, val sym: Boolean) {
         var name = ""; var labelled = false
+        var surface: NurbsSurface? = null
+        /** how the shape was settled, for the catalogue */
+        var how = ""
         fun dir(j: Int): FloatArray { val a = 2.0 * Math.PI * j / rad.size; val c = cos(a).toFloat(); val s = sin(a).toFloat(); return floatArrayOf(ux * c - uz * s, uz * c + ux * s) }
         fun height(): Float { var t = hc; for (r in h) for (v in r) t = max(t, v); return t }
         fun scale(k: Int) = ringScale(k, h.size)
@@ -1074,7 +1079,8 @@ object SmartModel {
         for (i in idx) { val x = P.x[i] - cx; val z = P.z[i] - cz; sxx += x * x; szz += z * z; sxz += x * z }
         val th = 0.5 * atan2(2 * sxz, sxx - szz)
         val ux = cos(th).toFloat(); val uz = sin(th).toFloat()
-        val M = intArrayOf(8, 12, 24)[level]; val K = intArrayOf(2, 3, 5)[level]
+        // measured always finely; the level only decides how finely the final surface is drawn
+        val M = MEAS_M; val K = MEAS_K
         // footprint radius every 360/M degrees: farthest crossing of the outline
         val rad = FloatArray(M)
         for (j in 0 until M) {
@@ -1144,19 +1150,14 @@ object SmartModel {
             val r = (rad[j] + rad[m]) / 2; rad[j] = r; rad[m] = r
             for (k in 0 until K) { val v = (h[k][j] + h[k][m]) / 2; h[k][j] = v; h[k][m] = v }
         }
-        // smooth: a little at low poly (noise only), more at high poly (rounder)
-        repeat(intArrayOf(1, 1, 2)[level]) {
-            // the outline only at high poly, where samples are close enough not to shorten the ends
-            val nr = FloatArray(M) { j -> 0.7f * rad[j] + 0.15f * (rad[(j + 1) % M] + rad[(j + M - 1) % M]) }
-            if (level == 2) nr.copyInto(rad)
-            val nh = Array(K) { k -> FloatArray(M) { j ->
-                val inner = if (k < K - 1) h[k + 1][j] else hc
-                val outer = if (k > 0) h[k - 1][j] else h[k][j]
-                if (k == 0) 0.6f * h[k][j] + 0.2f * (h[k][(j + 1) % M] + h[k][(j + M - 1) % M])
-                else 0.5f * h[k][j] + 0.125f * (h[k][(j + 1) % M] + h[k][(j + M - 1) % M] + inner + outer)
-            } }
-            for (k in 0 until K) nh[k].copyInto(h[k])
-        }
+        // light noise smoothing; the spline surface does the rest
+        val nh = Array(K) { k -> FloatArray(M) { j ->
+            val inner = if (k < K - 1) h[k + 1][j] else hc
+            val outer = if (k > 0) h[k - 1][j] else h[k][j]
+            if (k == 0) 0.6f * h[k][j] + 0.2f * (h[k][(j + 1) % M] + h[k][(j + M - 1) % M])
+            else 0.5f * h[k][j] + 0.125f * (h[k][(j + 1) % M] + h[k][(j + M - 1) % M] + inner + outer)
+        } }
+        for (k in 0 until K) nh[k].copyInto(h[k])
         for (k in 0 until K) for (j in 0 until M) h[k][j] = h[k][j].coerceIn(0.002f, hTop * 1.02f)
         return Blob(cx, cz, ux, uz, y0, rad, h, hc.coerceIn(0.002f, hTop * 1.02f), dom, sym)
     }
@@ -1254,7 +1255,7 @@ object SmartModel {
         var su = 0.0; var sv = 0.0
         for (i in idx) { val x = P.x[i] - cx; val z = P.z[i] - cz; val u = x * ux + z * uz; val v = -x * uz + z * ux; su += u * u; sv += v * v }
         val a = max(0.01f, 1.8f * sqrt(su / idx.size).toFloat()); val b = max(0.008f, 1.8f * sqrt(sv / idx.size).toFloat())
-        val M = intArrayOf(8, 12, 24)[level]; val K = intArrayOf(2, 3, 5)[level]
+        val M = MEAS_M; val K = MEAS_K
         val rad = FloatArray(M) { j -> val q = 2.0 * Math.PI * j / M; (a * b / sqrt((b * cos(q)).let { it * it } + (a * sin(q)).let { it * it })).toFloat() }
         val h = Array(K) { k -> val sc = if (k == 0) 0.985f else ringScale(k, K); FloatArray(M) { hTop * sqrt(max(0.05f, 1f - sc * sc)) } }
         return Blob(cx, cz, ux, uz, y0, rad, h, hTop, color, true)
@@ -1274,21 +1275,134 @@ object SmartModel {
         when (f.size) { 3 -> b.tri(f[0], f[1], f[2]); 4 -> b.quad(f[0], f[1], f[2], f[3]); else -> b.ngons.add(f) }
     }
 
+    private const val MEAS_M = 24
+    private const val MEAS_K = 5
+
+    /**
+     * Visual hull: every part of the object must fall inside its outline in each photo that
+     * sees it. The edge of the footprint and the height of the top are moved (in or out) to the
+     * largest size all views agree on, then blended with what the depth measured.
+     */
+    private fun carve(bl: Blob, views: List<Silhouette>): Int {
+        if (views.size < 3) return 0
+        // the outlines belong to the selected object: leave other objects alone
+        if (Silhouette.agree(views, bl.cx, bl.y0 + 0.5f * bl.height(), bl.cz) != true) return 0
+        val M = bl.rad.size; val K = bl.h.size
+        var moved = 0
+        fun pt(j: Int, r: Float, y: Float): FloatArray { val d = bl.dir(j); return floatArrayOf(bl.cx + d[0] * r, y, bl.cz + d[1] * r) }
+        fun best(lo: Float, hi: Float, at: (Float) -> FloatArray): Float? {
+            var f = hi
+            while (f >= lo - 1e-4f) {
+                val p = at(f)
+                if (Silhouette.agree(views, p[0], p[1], p[2]) == true) return f
+                f -= 0.025f
+            }
+            return null
+        }
+        val W = 0.7f
+        for (j in 0 until M) {
+            val y = bl.y0 + max(0.55f * bl.h[0][j], 0.012f)
+            val f = best(0.7f, 1.3f) { pt(j, bl.rad[j] * it, y) } ?: continue
+            if (abs(f - 1f) > 0.02f) moved++
+            bl.rad[j] *= 1f - W + W * f
+        }
+        for (k in 0 until K) for (j in 0 until M) {
+            val sc = if (k == 0) 0.97f else ringScale(k, K)
+            val r = bl.rad[j] * sc; val h0 = bl.h[k][j]
+            val g = best(0.6f, 1.3f) { pt(j, r, bl.y0 + h0 * it) } ?: continue
+            if (abs(g - 1f) > 0.02f) moved++
+            bl.h[k][j] = h0 * (1f - W + W * g)
+        }
+        run {
+            val g = best(0.6f, 1.3f) { floatArrayOf(bl.cx, bl.y0 + bl.hc * it, bl.cz) } ?: return@run
+            bl.hc *= 1f - W + W * g
+        }
+        if (bl.sym) for (j in 0..M / 2) {
+            val m = (M - j) % M
+            val r = (bl.rad[j] + bl.rad[m]) / 2; bl.rad[j] = r; bl.rad[m] = r
+            for (k in 0 until K) { val v = (bl.h[k][j] + bl.h[k][m]) / 2; bl.h[k][j] = v; bl.h[k][m] = v }
+        }
+        return moved
+    }
+
+    /** Uniform cubic B-spline basis at local parameter u. */
+    private fun bsp(u: Double) = doubleArrayOf((1 - u) * (1 - u) * (1 - u) / 6, (3 * u * u * u - 6 * u * u + 4) / 6, (-3 * u * u * u + 3 * u * u + 3 * u + 1) / 6, u * u * u / 6)
+
+    /** Least-squares closed cubic B-spline with [nc] control points through samples taken at equal steps. */
+    private fun closedFit(px: DoubleArray, py: DoubleArray, pz: DoubleArray, nc: Int): Array<DoubleArray> {
+        val m = px.size
+        val a = Array(nc) { DoubleArray(nc) }; val bx = DoubleArray(nc); val by = DoubleArray(nc); val bz = DoubleArray(nc)
+        for (j in 0 until m) {
+            val t = j.toDouble() / m * nc
+            val f = floor(t).toInt(); val w = bsp(t - f)
+            for (p in 0..3) {
+                val ip = (f + p) % nc
+                bx[ip] += w[p] * px[j]; by[ip] += w[p] * py[j]; bz[ip] += w[p] * pz[j]
+                for (q in 0..3) a[ip][(f + q) % nc] += w[p] * w[q]
+            }
+        }
+        for (i in 0 until nc) a[i][i] += 1e-9
+        // Gaussian elimination, three right-hand sides
+        val r = Array(nc) { doubleArrayOf(bx[it], by[it], bz[it]) }
+        for (c in 0 until nc) {
+            var piv = c
+            for (i in c + 1 until nc) if (abs(a[i][c]) > abs(a[piv][c])) piv = i
+            val t = a[c]; a[c] = a[piv]; a[piv] = t; val tr = r[c]; r[c] = r[piv]; r[piv] = tr
+            for (i in 0 until nc) if (i != c) {
+                val f = a[i][c] / a[c][c]
+                if (f == 0.0) continue
+                for (k in c until nc) a[i][k] -= f * a[c][k]
+                for (k in 0..2) r[i][k] -= f * r[c][k]
+            }
+        }
+        return Array(nc) { i -> doubleArrayOf(r[i][0] / a[i][i], r[i][1] / a[i][i], r[i][2] / a[i][i]) }
+    }
+
+    /**
+     * The free form as one NURBS surface: closed cubic B-spline around (U), cubic from the
+     * footprint on the desk up over the rim to the top (V).
+     */
+    private fun blobSurface(bl: Blob, level: Int, name: String): NurbsSurface {
+        val M = bl.rad.size; val K = bl.h.size
+        val nc = intArrayOf(10, 12, 16)[level]
+        val rows = ArrayList<Array<DoubleArray>>()
+        fun ring(sc: (Int) -> Float, y: (Int) -> Float) {
+            val xs = DoubleArray(M); val ys = DoubleArray(M); val zs = DoubleArray(M)
+            for (j in 0 until M) { val d = bl.dir(j); val r = bl.rad[j] * sc(j); xs[j] = (bl.cx + d[0] * r).toDouble(); ys[j] = y(j).toDouble(); zs[j] = (bl.cz + d[1] * r).toDouble() }
+            rows.add(closedFit(xs, ys, zs, nc))
+        }
+        ring({ 0.96f }) { bl.y0 }                                    // on the desk, a little inside: a rounded foot
+        ring({ 1.01f }) { bl.y0 + 0.45f * bl.h[0][it] }               // the side, slightly full
+        for (k in 0 until K) ring({ if (k == 0) 0.99f else ringScale(k, K) }) { bl.y0 + bl.h[k][it] }
+        rows.add(Array(nc) { doubleArrayOf(bl.cx.toDouble(), (bl.y0 + bl.hc).toDouble(), bl.cz.toDouble()) })  // the top
+        val nv = rows.size; val nu = nc + 3
+        val ctrl = DoubleArray(nu * nv * 4)
+        for (iv in 0 until nv) for (iu in 0 until nu) {
+            val c = rows[iv][iu % nc]; val o = (iv * nu + iu) * 4
+            ctrl[o] = c[0]; ctrl[o + 1] = c[1]; ctrl[o + 2] = c[2]; ctrl[o + 3] = 1.0
+        }
+        val ku = DoubleArray(nu + 4) { (it - 3).toDouble() / nc }
+        val inner = nv - 4
+        val kv = DoubleArray(nv + 4) { i -> when { i < 4 -> 0.0; i >= nv -> 1.0; else -> (i - 3).toDouble() / (inner + 1) } }
+        val steps = intArrayOf(8, 16, 32)[level]
+        return NurbsSurface(name, 3, 3, nu, nv, ku, kv, ctrl, steps, intArrayOf(3, 5, 9)[level], true, bl.color)
+    }
+
     private fun blobMesh(b: Builder, bl: Blob, level: Int, name: String) {
-        val M = bl.rad.size; val K = bl.h.size; val c = bl.color
+        val sf = bl.surface ?: blobSurface(bl, level, name).also { bl.surface = it }
+        val su = sf.stepsU; val sv = sf.stepsV; val c = bl.color
         val o = floatArrayOf(bl.cx, bl.y0 + 0.4f * bl.height(), bl.cz)
-        fun at(j: Int, sc: Float, y: Float): Int { val d = bl.dir(j); return b.v(bl.cx + d[0] * bl.rad[j] * sc, y, bl.cz + d[1] * bl.rad[j] * sc, c) }
-        val top = Array(K) { k -> IntArray(M) { j -> at(j, bl.scale(k), bl.y0 + bl.h[k][j]) } }
-        val centre = b.v(bl.cx, bl.y0 + bl.hc, bl.cz, c)
-        val base = IntArray(M) { j -> at(j, if (level == 2) 0.94f else 1f, bl.y0) }
-        // high poly: the side bulges out a little above the base, so the bottom edge reads round
-        val mid = if (level == 2) IntArray(M) { j -> at(j, 1.0f, bl.y0 + 0.35f * bl.h[0][j]) } else null
-        for (k in 0 until K - 1) for (j in 0 until M) { val q = (j + 1) % M; outward(b, intArrayOf(top[k][j], top[k][q], top[k + 1][q], top[k + 1][j]), o) }
-        for (j in 0 until M) { val q = (j + 1) % M; outward(b, intArrayOf(top[K - 1][j], top[K - 1][q], centre), o) }
-        val lower = mid ?: base
-        for (j in 0 until M) { val q = (j + 1) % M; outward(b, intArrayOf(lower[j], lower[q], top[0][q], top[0][j]), o) }
-        if (mid != null) for (j in 0 until M) { val q = (j + 1) % M; outward(b, intArrayOf(base[j], base[q], mid[q], mid[j]), o) }
-        outward(b, base.copyOf(), floatArrayOf(bl.cx, bl.y0 + 1f, bl.cz))
+        val q = DoubleArray(3)
+        // rows from the desk (v = 0) to just below the top; the top is one vertex
+        val grid = Array(sv) { iv -> IntArray(su) { iu ->
+            sf.eval(iu.toDouble() / su, iv.toDouble() / sv, q)
+            b.v(q[0].toFloat(), if (iv == 0) bl.y0 else q[1].toFloat(), q[2].toFloat(), c)
+        } }
+        sf.eval(0.0, 1.0, q)
+        val top = b.v(q[0].toFloat(), q[1].toFloat(), q[2].toFloat(), c)
+        for (iv in 0 until sv - 1) for (iu in 0 until su) { val n = (iu + 1) % su; outward(b, intArrayOf(grid[iv][iu], grid[iv][n], grid[iv + 1][n], grid[iv + 1][iu]), o) }
+        for (iu in 0 until su) outward(b, intArrayOf(grid[sv - 1][iu], grid[sv - 1][(iu + 1) % su], top), o)
+        outward(b, grid[0].copyOf(), floatArrayOf(bl.cx, bl.y0 + 1f, bl.cz))
         b.endGroup(name)
     }
 
@@ -1789,11 +1903,15 @@ object SmartModel {
         // ---- free-form objects
         for (p in blobs) {
             val gname = uniqueName(p.name, taken)
+            val moved = carve(p, opt.silhouettes)
+            if (moved > 0) p.how = "contorni da ${opt.silhouettes.size} viste, $moved punti corretti"
+            p.surface = blobSurface(p, level, "FREE${surf.size + 1}")
+            surf.add(p.surface!!)
             blobMesh(b, p, level, gname)
             nFree++
             catalog.add(CatalogPart(gname.replace('_', ' '), p.labelled, "freeform", p.center(), max(max(p.length(), p.width()) / 2, p.height() / 2),
                 String.format(Locale.US, "%.0f × %.0f × %.0f cm", p.length() * 100, p.width() * 100, p.height() * 100), p.color, b.groups.size - 1,
-                if (p.sym) "simmetrico" else "", floatArrayOf(p.ux, 0f, p.uz), p.length(), p.width() / 2))
+                listOf(if (p.sym) "simmetrico" else "", "superficie NURBS", p.how).filter { it.isNotEmpty() }.joinToString(", "), floatArrayOf(p.ux, 0f, p.uz), p.length(), p.width() / 2))
         }
 
         // ---- flat faces: slabs where the edge shows a thickness, single faces otherwise

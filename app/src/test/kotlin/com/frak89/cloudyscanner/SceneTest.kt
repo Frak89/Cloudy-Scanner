@@ -379,6 +379,58 @@ class SceneTest {
         assertTrue("length ${m.length}", m.length in 0.09f..0.14f)
         assertTrue("height ${box[4]}", box[4] in 0.025f..0.05f)
     }
+
+    /** Camera at [eye] looking at [tgt] (y up): column-major camera-to-world, camera looks along -Z. */
+    private fun lookAt(eye: FloatArray, tgt: FloatArray): FloatArray {
+        var fx = tgt[0] - eye[0]; var fy = tgt[1] - eye[1]; var fz = tgt[2] - eye[2]
+        val fl = sqrt(fx * fx + fy * fy + fz * fz); fx /= fl; fy /= fl; fz /= fl
+        var rx = -fz; var rz = fx; val rl = sqrt(rx * rx + rz * rz); rx /= rl; rz /= rl
+        val ux = -rz * fy; val uy = rz * fx - rx * fz; val uz = rx * fy
+        return floatArrayOf(rx, 0f, rz, 0f, ux, uy, uz, 0f, -fx, -fy, -fz, 0f, eye[0], eye[1], eye[2], 1f)
+    }
+
+    /** Outlines of the true object seen from 12 sides (convex hull of its projected points). */
+    private fun outlines(truth: Cloud, c: FloatArray, minY: Float): List<com.frak89.cloudyscanner.core.Silhouette> {
+        val out = ArrayList<com.frak89.cloudyscanner.core.Silhouette>()
+        for (k in 0 until 12) {
+            val a = k * 2 * PI.toFloat() / 12
+            val eye = floatArrayOf(c[0] + 0.32f * cos(a), c[1] + 0.2f, c[2] + 0.32f * sin(a))
+            val pose = lookAt(eye, c)
+            val probe = com.frak89.cloudyscanner.core.Silhouette(pose, 500f, 500f, 320f, 240f, 640, 480, floatArrayOf(0f, 0f, 1f, 0f, 1f, 1f))
+            val pts = (0 until truth.size).mapNotNull { probe.project(truth.p[it * 3], truth.p[it * 3 + 1], truth.p[it * 3 + 2]) }
+            // convex hull (monotone chain)
+            val sorted = pts.sortedWith(compareBy({ it[0] }, { it[1] }))
+            fun cross(o: FloatArray, a1: FloatArray, b1: FloatArray) = (a1[0] - o[0]) * (b1[1] - o[1]) - (a1[1] - o[1]) * (b1[0] - o[0])
+            val hull = ArrayList<FloatArray>()
+            for (pass in 0..1) {
+                val start = hull.size
+                for (p in if (pass == 0) sorted else sorted.reversed()) {
+                    while (hull.size >= start + 2 && cross(hull[hull.size - 2], hull[hull.size - 1], p) <= 0) hull.removeAt(hull.size - 1)
+                    hull.add(p)
+                }
+                hull.removeAt(hull.size - 1)
+            }
+            out.add(com.frak89.cloudyscanner.core.Silhouette(pose, 500f, 500f, 320f, 240f, 640, 480, FloatArray(hull.size * 2) { hull[it / 2][it % 2] }, minY))
+        }
+        return out
+    }
+
+    @Test fun edgesOfTheObjectCorrectANoisyScan() {
+        val truth = Cloud(); mouse(truth, 0.05f, -0.1f, 0.4f)
+        val c = Cloud(); noisyDesk(c, 0.05f, -0.1f)
+        val label = listOf(PartLabel(0.05f, 0.035f, -0.1f, "mouse", 0.07f, 0f))
+        fun run(views: List<com.frak89.cloudyscanner.core.Silhouette>) = SmartModel.build(c.size, c.p.toFloatArray(), c.n.toFloatArray(), c.c.toIntArray(), null,
+            SmartOptions(2, 0, true, false, "", label, views))!!
+        val plain = run(emptyList()); val withEdges = run(outlines(truth, floatArrayOf(0.05f, 0.02f, -0.1f), 0.008f))
+        show("noisy, depth only", plain); show("noisy + 12 outlines", withEdges)
+        val a = plain.parts.single { it.name == "mouse" }; val b = withEdges.parts.single { it.name == "mouse" }
+        val errA = abs(a.radius * 2 - 0.064f) + abs(a.length - 0.12f); val errB = abs(b.radius * 2 - 0.064f) + abs(b.length - 0.12f)
+        println("  size error: depth only %.1f cm, with outlines %.1f cm".format(errA * 100, errB * 100))
+        assertTrue("outlines make it closer to the true size", errB < errA * 0.6f)
+        assertTrue("width ${b.radius * 2}", b.radius * 2 in 0.055f..0.075f)
+        assertTrue(b.note.contains("contorni"))
+        assertTrue(volume(withEdges.mesh, b.group) > 0f)
+    }
 }
 
 object Palette0 {

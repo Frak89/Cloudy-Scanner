@@ -117,6 +117,14 @@ class MainActivity : Activity(), Director.Ui {
     private var capturing = false
     private var lastCaptureBuildNs = 0L
     private var captureLastInfo = ""
+    /** Outlines of the selected object, up to 3 (a burst) per direction around it. */
+    private val silBins = HashMap<Int, ArrayDeque<com.frak89.cloudyscanner.core.Silhouette>>()
+    /** Where the phone was for each outline: azimuth, elevation over the desk, distance, phone roll, desk tilt. */
+    private val viewLog = ArrayList<FloatArray>()
+    private var lastSilNs = 0L
+    private var aiCompact = false
+    private lateinit var aiLast: TextView
+    private lateinit var aiTools: View
     private var downloadId = -1L
     private var aiBusy = false
     private var d = 1f
@@ -139,6 +147,7 @@ class MainActivity : Activity(), Director.Ui {
         photos = PhotoStore(this, planner, engine.subject)
         recon = PhotoRecon(this, map)
         engine.fusion.frameHook = { photos.onFrame(it) }
+        engine.fusion.silhouetteHook = { sl -> ui.post { addSilhouette(sl) } }
         live = LiveVision(ai, kb, { grabCamera(true) }, { liveFacts() }, { aiBusy || director.running },
             { msg -> ui.post { aiStatus.text = msg; if (!live.running) { Opt.aiLive = false; refreshControls() } } },
             { r, secs -> ui.post { onRecognition(r, secs) } })
@@ -176,6 +185,7 @@ class MainActivity : Activity(), Director.Ui {
         recon.cancel = true
         live.stop()
         engine.fusion.frameHook = null
+        engine.fusion.silhouetteHook = null
         meshes.shutdown()
         engine.destroy()
         thread { ai.close() }
@@ -435,18 +445,31 @@ class MainActivity : Activity(), Director.Ui {
     }
 
     private fun buildAiPanel() {
+        // A see-through strip at the bottom: the object stays in view. "▾" shrinks it to one line.
         aiPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = rounded(PANEL, 16f)
-            setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
+            background = rounded((PANEL and 0x00FFFFFF) or 0x9E000000.toInt(), 16f)
+            setPadding(dp(12f), dp(6f), dp(12f), dp(8f))
             visibility = View.GONE
         }
-        aiPanel.addView(TextView(this).apply {
-            text = "IA LOCALE · AULA VIRTUALE"; setTextColor(ACCENT); textSize = 11f; letterSpacing = 0.12f
+        val head = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        head.addView(TextView(this).apply {
+            text = "IA LOCALE"; setTextColor(ACCENT); textSize = 11f; letterSpacing = 0.12f
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        head.addView(TextView(this).apply {
+            text = "▾ ▴"; setTextColor(TEXT); textSize = 15f; setPadding(dp(14f), dp(2f), dp(4f), dp(2f))
+            setOnClickListener { setAiCompact(!aiCompact) }
         })
-        aiStatus = TextView(this).apply { setTextColor(MUTED); textSize = 12f; text = ai.status; setPadding(0, dp(2f), 0, dp(6f)) }
+        head.addView(TextView(this).apply {
+            text = "✕"; setTextColor(TEXT); textSize = 15f; setPadding(dp(14f), dp(2f), dp(4f), dp(2f))
+            setOnClickListener { aiPanel.visibility = View.GONE; refreshControls() }
+        })
+        aiPanel.addView(head)
+        aiStatus = TextView(this).apply { setTextColor(MUTED); textSize = 12f; text = ai.status; setPadding(0, dp(2f), 0, dp(2f)); maxLines = 2 }
         aiPanel.addView(aiStatus)
+        aiLast = TextView(this).apply { setTextColor(TEXT); textSize = 12f; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; visibility = View.GONE }
+        aiPanel.addView(aiLast)
         val row = LinearLayout(this)
         row.addView(pill("Modello") { showModelDialog() })
         liveBtn = pill("IA live") { toggleLive() }
@@ -454,14 +477,25 @@ class MainActivity : Activity(), Director.Ui {
         row.addView(pill("Analizza scena") { analyseScene() })
         row.addView(pill("▶ Aula virtuale", ACCENT_DIM) { startClassroom() })
         row.addView(pill("Memoria") { showMemory() })
-        aiPanel.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(row) }, LinearLayout.LayoutParams(MATCH_PARENT, dp(48f)))
+        aiTools = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(row) }
+        aiPanel.addView(aiTools, LinearLayout.LayoutParams(MATCH_PARENT, dp(48f)))
         aiLog = TextView(this).apply { setTextColor(TEXT); textSize = 13f; setLineSpacing(dp(3f).toFloat(), 1f); setTextIsSelectable(true) }
         aiLive = TextView(this).apply { setTextColor(ACCENT); textSize = 13f; setTypeface(null, Typeface.ITALIC); visibility = View.GONE }
         val logCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(aiLog); addView(aiLive) }
         aiScroll = ScrollView(this).apply { addView(logCol) }
         aiPanel.addView(aiScroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
         aiLog.text = "Qui l'IA spiega passo passo cosa fa mentre ripulisce e ricostruisce la scena.\nFunziona anche senza modello, con le regole apprese."
-        overlay.addView(aiPanel, FrameLayout.LayoutParams(dp(360f), MATCH_PARENT, Gravity.START).apply { setMargins(dp(8f), dp(84f), 0, dp(64f)) })
+        val sheetH = (resources.displayMetrics.heightPixels * 0.30f).toInt()
+        overlay.addView(aiPanel, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM).apply { setMargins(dp(8f), 0, dp(8f), dp(64f)) })
+        aiScroll.layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, sheetH)
+    }
+
+    /** One line (status and the latest message) or the full panel with buttons and the log. */
+    private fun setAiCompact(c: Boolean) {
+        aiCompact = c
+        aiTools.visibility = if (c) View.GONE else View.VISIBLE
+        aiScroll.visibility = if (c) View.GONE else View.VISIBLE
+        aiLast.visibility = if (c) View.VISIBLE else View.GONE
     }
 
     private fun toggle(show: View, hide: View) {
@@ -717,6 +751,7 @@ class MainActivity : Activity(), Director.Ui {
     }
 
     private fun onSubjectLocked() {
+        silBins.clear(); viewLog.clear(); Opt.silhouettes = emptyList()
         photos.clear()
         live.reset()
         Opt.objectHint = ""
@@ -940,6 +975,7 @@ class MainActivity : Activity(), Director.Ui {
     override fun say(line: String) {
         ui.post {
             aiLog.append("\n\n" + line)
+            aiLast.text = line
             aiScroll.post { aiScroll.fullScroll(View.FOCUS_DOWN) }
         }
     }
@@ -1150,6 +1186,7 @@ class MainActivity : Activity(), Director.Ui {
         capturing = true; lastCaptureBuildNs = 0L; captureLastInfo = ""
         engine.scanning = true
         aiPanel.visibility = View.VISIBLE; optionsPanel.visibility = View.GONE
+        setAiCompact(true)
         aiLog.text = "CATTURA OGGETTO\nInquadra l'oggetto al centro dello schermo, a 25–40 cm. Appena lo prendo, giragli intorno lentamente " +
             "(anche un po' dall'alto): il modello si disegna sopra l'oggetto e si precisa da solo. Tocca «Fine cattura» quando ti piace."
         if (!Opt.aiLive && (ai.state == LocalAi.State.READY || ai.autoSelect())) toggleLive()
@@ -1185,7 +1222,8 @@ class MainActivity : Activity(), Director.Ui {
         if (!capturing) return
         val p = meshes.catalog.firstOrNull { it.labelled } ?: meshes.catalog.firstOrNull { it.kind != "face" && it.kind != "detail" } ?: return
         val pts = map.countFlag(PointMap.SUBJECT)
-        val info = "${p.name} · ${p.dims} · ${fmt(pts)} punti"
+        val bins = silBins.size
+        val info = "${p.name} · ${p.dims} · ${fmt(pts)} punti" + (if (bins > 0) " · contorni da $bins lati" else "")
         hud.objLabel = info
         aiStatus.text = "Cattura: $info"
         if (captureLastInfo.isEmpty()) say("Prima stesura: $info. Continua a girare: si precisa da sola.")
@@ -1202,6 +1240,7 @@ class MainActivity : Activity(), Director.Ui {
         say("Fine cattura: rifaccio il modello in HIGH poly con ${fmt(pts)} punti.")
         rebuild(2)
         val name = Opt.objectHint
+        saveCaptureViews(name.ifBlank { "oggetto" })
         thread(name = "capture-end") {
             val crop = grabCamera(true)
             val dims = subjectDims(); val colr = subjectColor()
@@ -1250,6 +1289,65 @@ class MainActivity : Activity(), Director.Ui {
             memory.addRefs(label, refs)
             say("Ho trovato ${refs.size} immagini di riferimento per «$q» (Wikimedia Commons) e le ho salvate con l'oggetto.")
         }
+    }
+
+    /** Roll of the phone away from level, in degrees (whichever way it is held). */
+    private fun rollOf(m: FloatArray): Float {
+        val a = Math.toDegrees(kotlin.math.atan2(m[1].toDouble(), m[5].toDouble())).toFloat()
+        return kotlin.math.abs(((a + 45f) % 90f + 90f) % 90f - 45f)
+    }
+
+    /** Where the phone is relative to the object and its desk: shown while capturing. */
+    private fun levelLine(): String {
+        val s = engine.subject; val m = engine.poseM
+        val dx = m[12] - s.x; val dy = m[13] - (if (s.supportY.isNaN()) s.y else s.supportY); val dz = m[14] - s.z
+        val d = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
+        val el = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), hypot(dx.toDouble(), dz.toDouble()))).toFloat()
+        val roll = rollOf(m)
+        val tilt = s.supportTilt
+        val sb = StringBuilder()
+        sb.append(String.format(Locale.US, "Vista %.0f° sopra il piano · %.0f cm", el, d * 100))
+        sb.append(if (roll > 8f) String.format(Locale.US, " · telefono storto %.0f° ↻", roll) else " · telefono dritto ✓")
+        if (!tilt.isNaN()) sb.append(if (tilt < 3f) " · piano 0° ✓" else String.format(Locale.US, " · piano inclinato %.0f°", tilt))
+        sb.append(" · contorni ${Opt.silhouettes.size} da ${silBins.size} lati")
+        return sb.toString()
+    }
+
+    private fun addSilhouette(sl: com.frak89.cloudyscanner.core.Silhouette) {
+        val s = engine.subject
+        if (!s.valid || !s.locked) return
+        val m = sl.pose
+        val dx = m[12] - s.x; val dz = m[14] - s.z
+        val dy = m[13] - (if (s.supportY.isNaN()) s.y else s.supportY)
+        val az = Math.toDegrees(kotlin.math.atan2(dz.toDouble(), dx.toDouble())).toFloat()
+        val el = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), hypot(dx.toDouble(), dz.toDouble()))).toFloat()
+        val bin = ((az + 180f) / 30f).toInt().coerceIn(0, 11) + 12 * (if (el > 40f) 1 else 0)
+        val q = silBins.getOrPut(bin) { ArrayDeque() }
+        q.addLast(sl); while (q.size > 3) q.removeFirst()
+        Opt.silhouettes = silBins.values.flatten()
+        viewLog.add(floatArrayOf(az, el, kotlin.math.sqrt(dx * dx + dy * dy + dz * dz), rollOf(m), s.supportTilt))
+        if (viewLog.size > 600) viewLog.subList(0, 100).clear()
+    }
+
+    /** The views of a capture (phone position, tilt, desk level, camera lens) saved next to the memory. */
+    private fun saveCaptureViews(name: String) {
+        try {
+            val d = File(Storage.appDir(this), "catture").also { it.mkdirs() }
+            val a = org.json.JSONArray()
+            for (sl in Opt.silhouettes) {
+                val m = sl.pose
+                a.put(org.json.JSONObject().put("pose", org.json.JSONArray(m.map { it.toDouble() }))
+                    .put("fx", sl.fx.toDouble()).put("fy", sl.fy.toDouble()).put("cx", sl.cx.toDouble()).put("cy", sl.cy.toDouble())
+                    .put("w", sl.width).put("h", sl.height).put("outline", org.json.JSONArray(sl.poly.map { it.toDouble() })))
+            }
+            val v = org.json.JSONArray()
+            for (r in viewLog) v.put(org.json.JSONObject().put("azimut", r[0].toDouble()).put("elevazione", r[1].toDouble())
+                .put("distanza_m", r[2].toDouble()).put("rollio", r[3].toDouble()).put("piano_gradi", if (r[4].isNaN()) 0.0 else r[4].toDouble()))
+            val s = engine.subject
+            val o = org.json.JSONObject().put("oggetto", name).put("piano_y", if (s.supportY.isNaN()) 0.0 else s.supportY.toDouble())
+                .put("piano_inclinazione", if (s.supportTilt.isNaN()) 0.0 else s.supportTilt.toDouble()).put("contorni", a).put("viste", v)
+            File(d, "${name.replace(Regex("[^\\p{L}\\p{N}]+"), "_")}_${System.currentTimeMillis()}.json").writeText(o.toString())
+        } catch (_: Throwable) { }
     }
 
     // ------------------------------------------------------------------ naming and memory
@@ -1525,6 +1623,8 @@ class MainActivity : Activity(), Director.Ui {
             sb.append('\n')
             sb.append("Incerti ${fmt(engine.uncertainCount)} · ripassati ${engine.guidance.resolved} · ${engine.trackingText}")
             updateSceneTarget()
+            if (s.locked && engine.scanning && System.nanoTime() - lastSilNs > 150_000_000L) { lastSilNs = System.nanoTime(); engine.fusion.silhouetteDue = true }
+            if (capturing && s.valid) sb.append('\n').append(levelLine())
             if (s.locked || (photos.sceneTarget != null && planner.count() > 0)) {
                 sb.append("\nFoto ${planner.coveredCount()}/${planner.slots.size} viste (${PhotoPlanner.LEVEL_NAMES[planner.level].lowercase()})")
                 val rej = planner.rejectedBlur + planner.rejectedSoft

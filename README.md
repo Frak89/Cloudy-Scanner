@@ -26,6 +26,18 @@ Tocca **◎ Cattura oggetto** e inquadra l'oggetto al centro, a 25–40 cm. In u
 - a **Fine cattura** rifà il modello in HIGH poly, chiede all'IA marca e modello, cerca foto di riferimento di quel
   prodotto su Wikimedia Commons e salva tutto nella memoria degli oggetti; se il nome non è noto te lo chiede.
 
+## Contorni e superfici NURBS (v1.8)
+
+Durante la cattura l'app salva la **sagoma** dell'oggetto da ogni lato (a raffiche di 3 per direzione): il bordo della
+maschera di profondità viene portato sull'immagine della fotocamera e agganciato al bordo di luminosità più vicino.
+Ogni sagoma porta con sé posizione e inclinazione del telefono, ottica e prospettiva di quello scatto.
+La forma libera viene poi corretta con tutte le sagome insieme (*visual hull*: ogni punto dell'oggetto deve cadere
+dentro il contorno in tutte le viste che lo vedono) e diventa **una superficie NURBS** (B-spline cubica chiusa attorno,
+cubica dal piano fino alla cima), esportata anche in IGES. LOW e HIGH sono la stessa superficie disegnata con 8 o 32 lati.
+Mentre catturi, in alto vedi l'angolo di vista sopra il piano, la distanza, se il telefono è storto e se il piano è a 0°;
+i dati delle viste finiscono in Download/CloudyScanner/catture. Il pannello IA ora è una striscia trasparente in basso
+che si riduce a una riga (▾).
+
 ## Come funziona
 
 | Funzione | Come è fatta |

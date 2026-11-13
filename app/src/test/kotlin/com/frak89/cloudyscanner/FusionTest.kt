@@ -45,7 +45,61 @@ private fun render(job: FrameJob, pose: FloatArray, c: FloatArray, R: Float, fra
     }
 }
 
+/** Same scene seen by the colour camera (4x the depth resolution): a bright ball on a dark floor. */
+private fun renderImage(job: FrameJob, pose: FloatArray, c: FloatArray, R: Float) {
+    val iw = W * 4; val ih = H * 4
+    job.iw = iw; job.ih = ih; job.yRow = iw; job.hasColor = true
+    if (job.yBuf.size != iw * ih) job.yBuf = ByteArray(iw * ih)
+    job.imgIntr[0] = FX * 4; job.imgIntr[1] = FY * 4; job.imgIntr[2] = CX * 4; job.imgIntr[3] = CY * 4
+    job.toImg[0] = 0f; job.toImg[1] = iw.toFloat(); job.toImg[2] = 0f; job.toImg[3] = 0f; job.toImg[4] = 0f; job.toImg[5] = ih.toFloat()
+    val ex = pose[12]; val ey = pose[13]; val ez = pose[14]
+    for (v in 0 until ih) for (u in 0 until iw) {
+        val x = (u + 0.5f - CX * 4) / (FX * 4); val y = (CY * 4 - v - 0.5f) / (FY * 4)
+        val dx = pose[0] * x + pose[4] * y - pose[8]; val dy = pose[1] * x + pose[5] * y - pose[9]; val dz = pose[2] * x + pose[6] * y - pose[10]
+        val ox = ex - c[0]; val oy = ey - c[1]; val oz = ez - c[2]
+        val a = dx * dx + dy * dy + dz * dz; val b = 2 * (ox * dx + oy * dy + oz * dz); val cc = ox * ox + oy * oy + oz * oz - R * R
+        val hit = b * b - 4 * a * cc > 0 && (-b - sqrt(b * b - 4 * a * cc)) > 0
+        job.yBuf[v * iw + u] = (if (hit) 210 else 50).toByte()
+    }
+}
+
 class FusionTest {
+@Test fun outlineFollowsTheObjectsEdges() {
+    val map = PointMap(0.015f)
+    val fusion = Fusion(map)
+    val job = FrameJob()
+    val rnd = java.util.Random(4)
+    val C = floatArrayOf(0f, -0.95f, -0.5f); val R = 0.05f
+    Opt.maxRange = 5f; Opt.focusSubject = true; Opt.fineObject = true; Opt.cutSupport = true
+    fusion.lockAt(C[0], C[1] + R, C[2])
+    val got = ArrayList<Silhouette>()
+    fusion.silhouetteHook = { got.add(it) }
+    for (k in 0 until 24) {
+        val a = k * 2 * PI.toFloat() / 24
+        val pose = lookAtPose(floatArrayOf(C[0] + 0.35f * sin(a), C[1] + 0.22f, C[2] + 0.35f * cos(a)), C)
+        render(job, pose, C, R, k + 1, rnd)
+        renderImage(job, pose, C, R)
+        fusion.silhouetteDue = k >= 4
+        fusion.fuse(job)
+    }
+    Opt.focusSubject = false
+    println("  outlines: ${got.size}, cut at y=%.3f".format(fusion.cutY))
+    assert(got.size >= 12) { "an outline per frame: ${got.size}" }
+    // the true ball is inside every outline, a ring 30% wider is outside
+    var inBall = 0; var outRing = 0; var total = 0
+    for (q in 0 until 24) {
+        val a = q * 2 * PI.toFloat() / 24
+        val xIn = C[0] + 0.85f * R * cos(a); val zIn = C[2] + 0.85f * R * sin(a)
+        val xOut = C[0] + 1.3f * R * cos(a); val zOut = C[2] + 1.3f * R * sin(a)
+        if (Silhouette.agree(got, xIn, C[1], zIn) == true) inBall++
+        if (Silhouette.agree(got, xOut, C[1], zOut) == false) outRing++
+        total++
+    }
+    println("  inside the ball: $inBall/$total, outside the wider ring: $outRing/$total")
+    assert(inBall >= total - 2) { "ball inside: $inBall/$total" }
+    assert(outRing >= total - 2) { "ring outside: $outRing/$total" }
+}
+
 @Test fun smallObjectIsCutFromTheFloorAndScannedFine() {
     val map = PointMap(0.015f)
     val fusion = Fusion(map)

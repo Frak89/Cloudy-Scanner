@@ -64,6 +64,8 @@ class SubjectState {
     @Volatile var extent = 0f
     /** Height of the desk / floor the subject stands on (cut away from it), NaN when none. */
     @Volatile var supportY = Float.NaN
+    /** How far that desk is from level, in degrees (smoothed), NaN when unknown. */
+    @Volatile var supportTilt = Float.NaN
 }
 
 /**
@@ -87,6 +89,11 @@ class Fusion(private val map: PointMap) {
 
     /** Called on the fusion thread after every frame (photo capture hooks in here). */
     @Volatile var frameHook: ((FrameJob) -> Unit)? = null
+    /** Receives the selected object's outline (snapped to the image edges) when [silhouetteDue] is set. */
+    @Volatile var silhouetteHook: ((com.frak89.cloudyscanner.core.Silhouette) -> Unit)? = null
+    @Volatile var silhouetteDue = false
+    /** Height below which the object was cut from its desk in the last frame (NaN when not cut). */
+    @Volatile var cutY = Float.NaN
 
     fun lockAt(x: Float, y: Float, z: Float) {
         anchor[0] = x; anchor[1] = y; anchor[2] = z
@@ -143,6 +150,10 @@ class Fusion(private val map: PointMap) {
 
         trackSubject(j, w, h)
         frameHook?.invoke(j)
+        if (silhouetteDue && subject.valid && subject.locked && subject.inside && j.hasColor) {
+            silhouetteDue = false
+            silhouette(j, w, h)?.let { s -> silhouetteHook?.invoke(s) }
+        }
         if (!j.insert) return
         // Focus mode: everything that is not the selected object is left out of the scan.
         val focus = Opt.focusSubject && subject.locked && subject.valid
@@ -300,6 +311,75 @@ class Fusion(private val map: PointMap) {
     }
 
     /**
+     * The object's outline in the camera image: the boundary of its depth region, carried to
+     * image pixels and moved onto the strongest brightness edge nearby (the depth image is
+     * coarse, the camera image sharp). Boundary stretches where it was cut from the desk keep
+     * their place: there is no edge there to find.
+     */
+    private fun silhouette(j: FrameJob, w: Int, h: Int): com.frak89.cloudyscanner.core.Silhouette? {
+        val cont = com.frak89.cloudyscanner.core.Silhouette.trace({ mask[it] != 0.toByte() }, w, h) ?: return null
+        val n = cont.size
+        val t = j.toImg
+        val ix = FloatArray(n); val iy = FloatArray(n); val cut = BooleanArray(n)
+        val cy0 = cutY
+        for (k in 0 until n) {
+            val i = cont[k]; val u = i % w; val v = i / w
+            val uu = (u + 0.5f) / w; val vv = (v + 0.5f) / h
+            ix[k] = t[0] + t[1] * uu + t[2] * vv; iy[k] = t[3] + t[4] * uu + t[5] * vv
+            // next to a desk pixel that was left out only for its height
+            if (!cy0.isNaN()) for (q in 0 until 4) {
+                val nu = u + NB_U[q]; val nv = v + NB_V[q]
+                if (nu < 0 || nv < 0 || nu >= w || nv >= h) continue
+                val ni = nv * w + nu
+                if (mask[ni] == 0.toByte() && valid[ni] != 0.toByte() && wldPts[ni * 3 + 1] < cy0 + 0.004f) { cut[k] = true; break }
+            }
+        }
+        var area = 0f
+        for (k in 0 until n) { val q = (k + 1) % n; area += ix[k] * iy[q] - ix[q] * iy[k] }
+        val sgn = if (area > 0) 1f else -1f
+        val reach = 1.2f * sqrt(t[1] * t[1] + t[4] * t[4]) / w + 1f   // about one depth pixel, in image pixels
+        val yb = j.yBuf; val row = j.yRow; val iw = j.iw; val ih = j.ih
+        fun lum(x: Int, y: Int) = yb[y * row + x].toInt() and 0xFF
+        val ox = FloatArray(n); val oy = FloatArray(n)
+        for (k in 0 until n) {
+            ox[k] = ix[k]; oy[k] = iy[k]
+            if (cut[k]) continue
+            val a = (k + n - 2) % n; val b = (k + 2) % n
+            var tx = ix[b] - ix[a]; var ty = iy[b] - iy[a]
+            val tl = sqrt(tx * tx + ty * ty); if (tl < 1e-3f) continue
+            tx /= tl; ty /= tl
+            // outward normal (the trace runs around the region)
+            val nx = ty * sgn; val ny = -tx * sgn
+            var bestS = 0f; var bestG = 0f
+            var s = -reach * 0.5f
+            while (s <= reach * 1.5f) {
+                val px = (ix[k] + nx * s).toInt(); val py = (iy[k] + ny * s).toInt()
+                if (px in 1 until iw - 1 && py in 1 until ih - 1) {
+                    val gx = lum(px + 1, py) - lum(px - 1, py); val gy = lum(px, py + 1) - lum(px, py - 1)
+                    // the edge across the outline, favouring the nearest
+                    val g = abs(gx * nx + gy * ny) * (1f - 0.25f * abs(s - reach * 0.5f) / reach)
+                    if (g > bestG) { bestG = g; bestS = s }
+                }
+                s += 1f
+            }
+            if (bestG > 18f) { ox[k] = ix[k] + nx * bestS; oy[k] = iy[k] + ny * bestS }
+            else { ox[k] = ix[k] + nx * reach * 0.5f; oy[k] = iy[k] + ny * reach * 0.5f }   // half a depth pixel out: the region's true edge
+        }
+        // light smoothing, then at most 160 vertices
+        val step = max(1, n / 160)
+        val m = (n + step - 1) / step
+        val poly = FloatArray(m * 2)
+        for (q in 0 until m) {
+            val k = q * step; val a = (k + n - 1) % n; val b = (k + 1) % n
+            poly[q * 2] = (ox[a] + 2 * ox[k] + ox[b]) / 4; poly[q * 2 + 1] = (oy[a] + 2 * oy[k] + oy[b]) / 4
+        }
+        val ii = j.imgIntr
+        if (ii[0] <= 0f) return null
+        return com.frak89.cloudyscanner.core.Silhouette(j.pose.copyOf(), ii[0], ii[1], ii[2], ii[3], j.iw, j.ih, poly,
+            if (cy0.isNaN()) -Float.MAX_VALUE else cy0 + 0.004f)
+    }
+
+    /**
      * Segments the subject by growing a region of continuous depth from a seed pixel:
      * the tapped anchor when locked, otherwise the image centre. The anchor follows the
      * region's centroid, so a locked subject is re-acquired every frame even when it moves.
@@ -389,7 +469,7 @@ class Fusion(private val map: PointMap) {
         grow(-Float.MAX_VALUE)
         // An object on a desk is joined to the desk by continuous depth: find the desk (the most
         // common height clearly below the seed) and grow again above it, so the object is just the object.
-        subject.supportY = Float.NaN
+        subject.supportY = Float.NaN; cutY = Float.NaN
         if (Opt.cutSupport && cnt > 60) {
             val seedY = wldPts[s3 + 1]
             val bins = IntArray(200)
@@ -405,17 +485,34 @@ class Fusion(private val map: PointMap) {
             if (mb >= 0 && bins[mb] >= 40 && bins[mb] >= 0.15f * cnt) {
                 // refine the desk height from the pixels in that bin and its neighbours
                 var sum = 0.0; var n = 0
+                // and its tilt: least-squares plane y = a x + b z + c through those pixels
+                var sx = 0.0; var sz = 0.0; var sxx = 0.0; var szz = 0.0; var sxz = 0.0; var sxy = 0.0; var szy = 0.0
                 for (i in 0 until w * h) {
                     if (mask[i] == 0.toByte()) continue
                     val dy = seedY - wldPts[i * 3 + 1]
-                    if (dy >= (mb - 1) * 0.01f && dy < (mb + 2) * 0.01f) { sum += wldPts[i * 3 + 1]; n++ }
+                    if (dy >= (mb - 1) * 0.01f && dy < (mb + 2) * 0.01f) {
+                        val x = wldPts[i * 3].toDouble(); val y = wldPts[i * 3 + 1].toDouble(); val z = wldPts[i * 3 + 2].toDouble()
+                        sum += y; n++; sx += x; sz += z; sxx += x * x; szz += z * z; sxz += x * z; sxy += x * y; szy += z * y
+                    }
                 }
                 val desk = (sum / n).toFloat()
+                run {
+                    val mx = sx / n; val mz = sz / n; val my = sum / n
+                    val cxx = sxx / n - mx * mx; val czz = szz / n - mz * mz; val cxz = sxz / n - mx * mz
+                    val cxy = sxy / n - mx * my; val czy = szy / n - mz * my
+                    val det = cxx * czz - cxz * cxz
+                    if (det > 1e-10) {
+                        val a = (cxy * czz - czy * cxz) / det; val bb = (czy * cxx - cxy * cxz) / det
+                        val tilt = Math.toDegrees(kotlin.math.atan(sqrt(a * a + bb * bb))).toFloat()
+                        subject.supportTilt = if (subject.supportTilt.isNaN()) tilt else subject.supportTilt * 0.8f + tilt * 0.2f
+                    }
+                }
                 val zc = -camPts[s3 + 2]
                 val margin = 0.006f + 0.012f * zc
                 if (seedY > desk + margin) {
                     grow(desk + margin)
                     subject.supportY = desk
+                    cutY = desk + margin
                 }
             }
         }
