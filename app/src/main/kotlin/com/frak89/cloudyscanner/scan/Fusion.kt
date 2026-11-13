@@ -144,6 +144,8 @@ class Fusion(private val map: PointMap) {
         if (!j.insert) return
         // Focus mode: everything that is not the selected object is left out of the scan.
         val focus = Opt.focusSubject && subject.locked && subject.valid
+        // The selected object is kept at 5 mm instead of 1.5 cm, so small things (a mouse) have a shape.
+        val fine = Opt.fineObject && subject.locked && subject.valid && subject.extent < 0.6f
 
         val stride = bgStride
         val invVoxel = 1f / map.voxel
@@ -201,7 +203,7 @@ class Fusion(private val map: PointMap) {
                 // Pixel footprint relative to the voxel: beyond ~2 m a voxel is only hit now and then.
                 val fp = z * ifx * invVoxel
                 val boost = if (fp <= 1f) 1f else min(6f, fp * fp)
-                map.insert(wldPts[o], wldPts[o + 1], wldPts[o + 2], wx, wy, wz, color, wgt, subj, j.frame, boost)
+                map.insert(wldPts[o], wldPts[o + 1], wldPts[o + 2], wx, wy, wz, color, wgt, subj, j.frame, boost, subj && fine)
             }
 
             // 3. Free-space carving: a point sitting in front of what we now see is stale

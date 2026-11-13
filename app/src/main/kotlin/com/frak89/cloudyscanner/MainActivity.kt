@@ -39,6 +39,8 @@ import com.frak89.cloudyscanner.ai.KnowledgeBuffer
 import com.frak89.cloudyscanner.ai.LiveVision
 import com.frak89.cloudyscanner.ai.LocalAi
 import com.frak89.cloudyscanner.ai.ObjectCrops
+import com.frak89.cloudyscanner.ai.ObjectMemory
+import com.frak89.cloudyscanner.ai.WebRefs
 import com.frak89.cloudyscanner.ai.PosedImage
 import com.frak89.cloudyscanner.ai.Recognition
 import com.frak89.cloudyscanner.ai.VisionParse
@@ -72,6 +74,7 @@ class MainActivity : Activity(), Director.Ui {
     private lateinit var meshes: MeshWorker
     private lateinit var eraser: Eraser
     private lateinit var kb: KnowledgeBuffer
+    private lateinit var memory: ObjectMemory
     private lateinit var ai: LocalAi
     private lateinit var director: Director
     private val planner = PhotoPlanner()
@@ -126,6 +129,7 @@ class MainActivity : Activity(), Director.Ui {
         meshes = MeshWorker(map, renderer)
         eraser = Eraser(map, renderer)
         kb = KnowledgeBuffer(this).also { it.load() }
+        memory = ObjectMemory(this).also { it.load() }
         ai = LocalAi(this)
         director = Director(map, engine, meshes, renderer, ai, kb, eraser, this)
         photos = PhotoStore(this, planner, engine.subject)
@@ -415,6 +419,8 @@ class MainActivity : Activity(), Director.Ui {
         choice(col, arrayOf("16", "24", "32"), { sideValues.indexOf(Opt.circleSides).let { if (it >= 4) it - 4 else -1 } }) { Opt.circleSides = sideValues[it + 4]; refreshControls(); rebuildIfShown() }
         sw(col, "Smussi sui bordi tondi", { Opt.bevel }) { Opt.bevel = it; rebuildIfShown() }
         sw(col, "Tieni i dettagli irregolari come mesh", { Opt.keepDetails }) { Opt.keepDetails = it; rebuildIfShown() }
+        sw(col, "Oggetto selezionato a 5 mm (oggetti piccoli)", { Opt.fineObject }) { Opt.fineObject = it }
+        sw(col, "Immagini di riferimento da internet", { Opt.webRefs }) { Opt.webRefs = it }
         slider(col, "Smoothing", 0f, 3f, { Opt.smoothIters.toFloat() }, { "${Math.round(it)}×" }) { Opt.smoothIters = Math.round(it) }
         sw(col, "Ricostruzione in tempo reale", { Opt.realtimeMesh }) { Opt.realtimeMesh = it }
 
@@ -524,7 +530,7 @@ class MainActivity : Activity(), Director.Ui {
 
     /** Options of the clean model changed: redo the mesh that is on screen. */
     private fun rebuildIfShown() {
-        if (meshes.mesh != null && meshes.level in 0..2 && map.size >= 100) meshes.request(meshes.level, Opt.smoothIters, 0, 0.6f) { ui.post { refreshControls() } }
+        if (meshes.mesh != null && meshes.level in 0..2 && map.size >= 100) meshes.request(meshes.level, Opt.smoothIters, 0, 0.6f) { ui.post { refreshControls(); onModelBuilt() } }
     }
 
     private fun remeshIfAny() {
@@ -542,6 +548,7 @@ class MainActivity : Activity(), Director.Ui {
                 } else if (m != null) {
                     val counts = "${fmt(m.vertexCount)} vertici · ${fmt(m.quadCount)} quads" + (if (m.ngonCount > 0) " · ${m.ngonCount} n-goni" else "") + " · ${fmt(m.triangleCount)} triangoli"
                     if (Opt.smart) {
+                        onModelBuilt()
                         aiLog.append("\n\nModello pulito ${Opt.levelName[level]}: ${meshes.nurbsInfo}\n$counts")
                         val cat = meshes.catalog.filter { c -> c.kind != "face" }
                         if (cat.isNotEmpty()) aiLog.append("\nCatalogo: " + cat.joinToString(" · ") { c -> c.name } + "\n(menu Mesh → Catalogo oggetti per rinominarli o farli riconoscere all'IA)")
@@ -731,9 +738,13 @@ class MainActivity : Activity(), Director.Ui {
             "Esporta foto + pose in Download",
             "Svuota le foto (${planner.count()})",
         )
-        items.forEachIndexed { i, t -> pm.menu.add(0, i, i, t) }
+        pm.menu.add(0, 20, 0, "Dì cos'è (dai tu il nome all'oggetto)")
+        pm.menu.add(0, 21, 0, "Oggetti in memoria (${memory.entries.size})")
+        items.forEachIndexed { i, t -> pm.menu.add(0, i, i + 1, t) }
         pm.setOnMenuItemClickListener {
             when (it.itemId) {
+                20 -> nameSubject()
+                21 -> showObjectMemory()
                 0 -> if (Opt.focusSubject || needSubject()) {
                     Opt.focusSubject = !Opt.focusSubject
                     toast(if (Opt.focusSubject) "Da ora acquisisco solo l'oggetto selezionato" else "Acquisisco di nuovo tutta la scena")
@@ -851,11 +862,19 @@ class MainActivity : Activity(), Director.Ui {
                 p.append("Misure dalla scansione 3D:\n").append(report)
                 val mem = kb.promptContext()
                 if (mem.isNotEmpty()) p.append(mem).append('\n')
-                val text = ai.generate(SYSTEM_OBJECT, p.toString(), listOfNotNull(image), 300) { stream(it) }
+                // Objects the user already taught: shown as examples, so the same thing gets the same name.
+                val dims = subjectDims(); val colr = subjectColor()
+                val examples = if (dims != null) memory.closest(dims, colr, 2) else emptyList()
+                val exImgs = ArrayList<ByteArray>()
+                for (e in examples) { val f = e.photos.lastOrNull() ?: e.refs.firstOrNull() ?: continue; try { exImgs.add(File(f).readBytes()); p.append("Immagine ${exImgs.size + 1}: «${e.name}», un oggetto che l'utente mi ha già fatto conoscere (${cmDims(e.dims)}).\n") } catch (_: Throwable) { } }
+                if (exImgs.isNotEmpty()) p.append("Se l'oggetto della prima immagine è uno di questi, usa esattamente lo stesso nome.\n")
+                val text = ai.generate(SYSTEM_OBJECT, p.toString(), listOfNotNull(image) + exImgs, 300) { stream(it) }
                 stream(null)
                 say("IA: " + text.trim())
-                val r = VisionParse.parse(text)
-                if (r.known) ui.post { onRecognition(r, 0f) }
+                var r = VisionParse.parse(text)
+                // Unsure: compare with reference photos of what it thinks it is.
+                if (r.known && r.confidence < 60 && image != null) confirmWithReferences(r, image)?.let { r = it }
+                if (r.known) { val rr = r; ui.post { onRecognition(rr, 0f) } }
                 text.lines().firstOrNull { it.trim().uppercase().startsWith("NOTA") }?.let { kb.addNote(it.substringAfter(':').trim()); kb.save() }
             } catch (t: Throwable) {
                 stream(null); say("Analisi non riuscita: ${t.message ?: t.javaClass.simpleName}")
@@ -891,7 +910,7 @@ class MainActivity : Activity(), Director.Ui {
             // The object in view (selected or just framed) gets the name: its shape follows from it.
             val s = engine.subject; val n = r.name.lowercase(Locale.ITALIAN)
             relabelled = Opt.labels.none { it.name == n && (it.x - s.x) * (it.x - s.x) + (it.y - s.y) * (it.y - s.y) + (it.z - s.z) * (it.z - s.z) < 0.03f * 0.03f }
-            if (relabelled) putLabel(s.x, s.y, s.z, n)
+            if (relabelled) putLabel(s.x, s.y, s.z, n, size = s.extent / 2)
         }
         if (r.known && r.confidence >= 60 && (relabelled || !r.name.equals(Opt.objectHint, true))) {
             // AI boost: knowing what the object is lets the clean model build it as such objects are made.
@@ -992,9 +1011,9 @@ class MainActivity : Activity(), Director.Ui {
     }
 
     /** Names the object nearest to a point (replacing an older name at the same spot) and rebuilds the clean model. */
-    private fun putLabel(x: Float, y: Float, z: Float, name: String, rebuild: Boolean = false) {
+    private fun putLabel(x: Float, y: Float, z: Float, name: String, rebuild: Boolean = false, size: Float = 0f) {
         val keep = Opt.labels.filter { val dx = it.x - x; val dy = it.y - y; val dz = it.z - z; dx * dx + dy * dy + dz * dz > 0.05f * 0.05f }
-        Opt.labels = keep + PartLabel(x, y, z, name)
+        Opt.labels = keep + PartLabel(x, y, z, name, size)
         if (rebuild) rebuildIfShown()
     }
 
@@ -1097,6 +1116,156 @@ class MainActivity : Activity(), Director.Ui {
             } catch (t: Throwable) { stream(null); say("Riconoscimento non riuscito: ${t.message ?: t.javaClass.simpleName}") }
             finally { finished() }
         }
+    }
+
+    // ------------------------------------------------------------------ naming and memory
+
+    private fun cmDims(d: FloatArray) = String.format(Locale.US, "%.0f × %.0f × %.0f cm", d[0] * 100, d[1] * 100, d[2] * 100)
+
+    /** Size of the selected object from its points: the two sides seen from above (longer first) and the height. */
+    private fun subjectDims(): FloatArray? {
+        map.lock.lock()
+        try {
+            val idx = (0 until map.size).filter { map.hasFlag(it, PointMap.SUBJECT) }
+            if (idx.size < 20) return null
+            var cx = 0f; var cz = 0f
+            for (i in idx) { cx += map.pos[i * 3]; cz += map.pos[i * 3 + 2] }
+            cx /= idx.size; cz /= idx.size
+            var sxx = 0.0; var szz = 0.0; var sxz = 0.0
+            for (i in idx) { val x = map.pos[i * 3] - cx; val z = map.pos[i * 3 + 2] - cz; sxx += x * x; szz += z * z; sxz += x * z }
+            val th = 0.5 * kotlin.math.atan2(2 * sxz, sxx - szz)
+            val ux = cos(th).toFloat(); val uz = sin(th).toFloat()
+            val us = idx.map { (map.pos[it * 3] - cx) * ux + (map.pos[it * 3 + 2] - cz) * uz }.sorted()
+            val vs = idx.map { -(map.pos[it * 3] - cx) * uz + (map.pos[it * 3 + 2] - cz) * ux }.sorted()
+            val ys = idx.map { map.pos[it * 3 + 1] }.sorted()
+            fun span(l: List<Float>) = l[(l.size * 0.97f).toInt().coerceAtMost(l.size - 1)] - l[(l.size * 0.03f).toInt()]
+            val a = span(us); val b = span(vs)
+            return floatArrayOf(maxOf(a, b), minOf(a, b), span(ys))
+        } finally { map.lock.unlock() }
+    }
+
+    private fun subjectColor(): Int {
+        map.lock.lock()
+        try {
+            val idx = (0 until map.size).filter { map.hasFlag(it, PointMap.SUBJECT) }
+            return if (idx.isEmpty()) 0 else com.frak89.cloudyscanner.core.SmartModel.dominantColor(map.col, idx)
+        } finally { map.lock.unlock() }
+    }
+
+    /** Size of one object of the clean model, as [subjectDims]. */
+    private fun partDims(p: CatalogPart): FloatArray? {
+        val m = meshes.mesh ?: return null
+        val g = m.groups.getOrNull(p.group) ?: return null
+        var x0 = Float.MAX_VALUE; var x1 = -Float.MAX_VALUE; var y0 = Float.MAX_VALUE; var y1 = -Float.MAX_VALUE; var z0 = Float.MAX_VALUE; var z1 = -Float.MAX_VALUE
+        fun add(v: Int) { val x = m.pos[v * 3]; val y = m.pos[v * 3 + 1]; val z = m.pos[v * 3 + 2]; x0 = minOf(x0, x); x1 = maxOf(x1, x); y0 = minOf(y0, y); y1 = maxOf(y1, y); z0 = minOf(z0, z); z1 = maxOf(z1, z) }
+        for (f in g.faceStart until g.faceEnd) for (k in 0 until 4) add(m.quads[f * 4 + k])
+        for (n in g.ngonStart until g.ngonEnd) for (v in m.ngons[n]) add(v)
+        if (x1 < x0) return null
+        val a: Float; val b: Float
+        if (p.kind == "freeform") { a = p.length; b = p.radius * 2 } else { a = maxOf(x1 - x0, z1 - z0); b = minOf(x1 - x0, z1 - z0) }
+        return floatArrayOf(maxOf(a, b), minOf(a, b), y1 - y0)
+    }
+
+    /** After each clean model: objects that match one in memory get its name; named ones refine the memory. */
+    private fun onModelBuilt() {
+        var added = 0
+        for (p in meshes.catalog) {
+            if (p.kind !in setOf("freeform", "revolution", "prism") || p.size > 0.5f) continue
+            val d = partDims(p) ?: continue
+            if (p.labelled) { memory.refine(p.name, d, p.color); continue }
+            val e = memory.match(d, p.color) ?: continue
+            if (Opt.labels.any { it.name.equals(e.name, true) }) continue
+            putLabel(p.center[0], p.center[1], p.center[2], e.name, size = p.size)
+            say("Dalla memoria: «${p.name}» (${p.dims}) è «${e.name}».")
+            added++
+        }
+        if (added > 0) rebuildIfShown()
+    }
+
+    private fun nameSubject() {
+        if (!engine.subject.valid) { toast("Prima tocca l'oggetto nella vista AR per selezionarlo"); return }
+        val ed = EditText(this).apply { hint = "es. mouse, telecomando, tazza…"; setText(Opt.objectHint) }
+        val b = AlertDialog.Builder(this).setTitle("Che cos'è questo oggetto?").setView(ed)
+            .setPositiveButton("OK") { _, _ -> val n = ed.text.toString().trim().lowercase(Locale.ITALIAN); if (n.isNotEmpty()) applyName(n) }
+            .setNegativeButton("Annulla", null)
+        if (memory.entries.isNotEmpty()) b.setNeutralButton("Dalla memoria") { _, _ ->
+            val names = memory.entries.map { it.name }.toTypedArray()
+            AlertDialog.Builder(this).setTitle("Oggetti in memoria").setItems(names) { _, w -> applyName(names[w]) }.show()
+        }
+        b.show()
+    }
+
+    /** The user says what the selected object is: it is built as such, and remembered. */
+    private fun applyName(name: String) {
+        val s = engine.subject
+        if (!s.valid) { toast("Prima tocca l'oggetto nella vista AR per selezionarlo"); return }
+        putLabel(s.x, s.y, s.z, name, size = s.extent / 2)
+        Opt.objectHint = name
+        hud.objLabel = name
+        if (!Opt.smart) { Opt.smart = true; say("Ho riacceso «Modello pulito»: senza, l'app fa solo la mesh densa.") }
+        aiPanel.visibility = View.VISIBLE; optionsPanel.visibility = View.GONE
+        say("«$name»: me lo ricordo e costruisco il modello con la sua forma.")
+        if (meshes.mesh != null && meshes.level in 0..2) rebuildIfShown() else if (map.size > 300) rebuild(Opt.meshLevel.coerceIn(0, 2))
+        thread(name = "remember") {
+            val dims = subjectDims(); val colr = subjectColor()
+            val crop = grabCamera(true)
+            memory.remember(name, dims, colr, crop)
+            kb.addNote("L'utente mi ha insegnato «$name»" + (if (dims != null) ": circa ${cmDims(dims)}" else "") + ".")
+            kb.save()
+            if (dims != null && maxOf(dims[0], dims[2]) < 0.25f) {
+                val pts = map.lock.let { it.lock(); try { (0 until map.size).count { i -> map.hasFlag(i, PointMap.SUBJECT) } } finally { it.unlock() } }
+                if (pts < 300) say("«$name» ha solo $pts punti: per un oggetto così piccolo giragli intorno ancora un po' a 25–35 cm (con l'oggetto selezionato i punti sono ogni 5 mm), poi ricostruisci.")
+            }
+            if (Opt.webRefs && memory.get(name)?.refs.isNullOrEmpty()) {
+                val refs = WebRefs.search(englishQuery(name), 3)
+                if (refs.isNotEmpty()) { memory.addRefs(name, refs); say("Ho salvato ${refs.size} immagini di riferimento di «$name» (Wikimedia Commons): mi aiutano a riconoscerlo la prossima volta.") }
+            }
+        }
+    }
+
+    private fun showObjectMemory() {
+        if (memory.entries.isEmpty()) { toast("Nessun oggetto in memoria: selezionane uno e usa «Dì cos'è»"); return }
+        val names = memory.entries.map { e -> "${e.name} · ${if (e.dims[0] > 0f) cmDims(e.dims) else "misure da rilevare"} · ${e.photos.size} foto, ${e.refs.size} riferimenti" }.toTypedArray()
+        AlertDialog.Builder(this).setTitle("Oggetti in memoria").setItems(names) { _, w ->
+            val e = memory.entries[w]
+            AlertDialog.Builder(this).setTitle(e.name)
+                .setItems(arrayOf("È l'oggetto selezionato adesso", "Dimentica")) { _, k ->
+                    if (k == 0) applyName(e.name) else { memory.forget(e.name); toast("«${e.name}» dimenticato") }
+                }.show()
+        }.setNegativeButton("Chiudi", null).show()
+    }
+
+    /** Words for an image search: English works best on Wikimedia Commons. */
+    private fun englishQuery(name: String): String {
+        val n = name.lowercase(Locale.ITALIAN)
+        val dict = mapOf("mouse" to "computer mouse", "topo" to "computer mouse", "telecomando" to "remote control", "tastiera" to "computer keyboard",
+            "tazza" to "mug", "bicchiere" to "drinking glass", "bottiglia" to "bottle", "lattina" to "beverage can", "piatto" to "plate dish",
+            "candela" to "candle", "clessidra" to "hourglass", "barattolo" to "jar", "vaso" to "vase", "lampada" to "lamp", "cuffie" to "headphones",
+            "controller" to "game controller", "gamepad" to "gamepad", "joystick" to "joystick", "scarpa" to "shoe", "sasso" to "stone pebble",
+            "libro" to "book", "telefono" to "smartphone", "cellulare" to "smartphone", "occhiali" to "eyeglasses", "forbici" to "scissors",
+            "spillatrice" to "stapler", "penna" to "pen", "tavolino" to "side table", "sedia" to "chair", "zaino" to "backpack", "borsa" to "bag")
+        for ((k, v) in dict) if (n.contains(k)) return v
+        return name
+    }
+
+    /**
+     * The AI is unsure: show it reference photos of what it thinks the object is (from memory,
+     * or from Wikimedia Commons) and ask whether it is the same kind of thing.
+     */
+    private fun confirmWithReferences(r: Recognition, image: ByteArray): Recognition? {
+        if (!Opt.webRefs && memory.get(r.name)?.refs.isNullOrEmpty()) return null
+        stream("Cerco immagini di riferimento di «${r.name}»…")
+        val refs = memory.get(r.name)?.refs?.mapNotNull { f -> try { File(f).readBytes() } catch (_: Throwable) { null } }?.takeIf { it.isNotEmpty() }
+            ?: (if (Opt.webRefs) WebRefs.search(englishQuery(r.name), 3) else emptyList())
+        if (refs.isEmpty()) { stream(null); say("Non ho trovato immagini di riferimento di «${r.name}» (sei offline?)."); return null }
+        val p = "La prima immagine è l'oggetto scansionato. Le altre ${refs.size} sono foto di riferimento di «${r.name}» prese da internet.\n" +
+            "L'oggetto della prima immagine è un «${r.name}»? Rispondi con le righe:\nOGGETTO: <nome breve>\nSICUREZZA: <0-100>\nUGUALE: SI oppure NO"
+        val text = ai.generate(SYSTEM_OBJECT, p, listOf(image) + refs, 120) { stream(it) }
+        stream(null)
+        val same = Regex("UGUALE\\s*:\\s*S[IÌ]", RegexOption.IGNORE_CASE).containsMatchIn(text)
+        val c = VisionParse.parse(text)
+        say("IA (confronto con ${refs.size} immagini di riferimento): " + (if (same) "sì, è «${r.name}»" else "non è «${r.name}»") + " · ${c.confidence}%")
+        return if (same && c.confidence >= 50) Recognition(r.name, maxOf(c.confidence, 60), r.level, "", r.material) else null
     }
 
     private fun grabSnapshot(): ByteArray? {

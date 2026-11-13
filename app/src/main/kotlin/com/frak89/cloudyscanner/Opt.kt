@@ -57,7 +57,11 @@ object Opt {
     @Volatile var circleSides = 0
     @Volatile var bevel = true
     /** Keep irregular parts as ordinary mesh next to the clean solids. */
-    @Volatile var keepDetails = true
+    @Volatile var keepDetails = false
+    /** The selected object is scanned with 5 mm points instead of 1.5 cm. */
+    @Volatile var fineObject = true
+    /** Look up reference photos of a named object on Wikimedia Commons. */
+    @Volatile var webRefs = true
     /** What the AI says the object is; steers typical finishing (e.g. the rim of a can). */
     @Volatile var objectHint = ""
     /** Names given to objects of the scene (by the AI or by hand), by position. */

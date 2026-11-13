@@ -21,8 +21,9 @@ import kotlin.math.sqrt
 class SceneTest {
     class Cloud { val p = ArrayList<Float>(); val n = ArrayList<Float>(); val c = ArrayList<Int>()
         val rnd = Random(12)
+        var noise = 0.002f
         fun g(s: Float) = (rnd.nextGaussian() * s).toFloat()
-        fun add(x: Float, y: Float, z: Float, a: Float, b: Float, d: Float, col: Int, noise: Float = 0.002f) {
+        fun add(x: Float, y: Float, z: Float, a: Float, b: Float, d: Float, col: Int, noise: Float = this.noise) {
             val l = max(1e-6f, sqrt(a * a + b * b + d * d))
             p.add(x + a / l * g(noise)); p.add(y + b / l * g(noise)); p.add(z + d / l * g(noise))
             n.add(a / l + g(0.08f)); n.add(b / l + g(0.08f)); n.add(d / l + g(0.08f)); c.add(jitter(col))
@@ -285,6 +286,82 @@ class SceneTest {
         assertEquals("freeform", m.kind)
         assertTrue(m.labelled)
         assertTrue(s.parts.any { it.kind == "revolution" && abs(it.center[0] - 0.18f) < 0.02f })
+    }
+
+    /** Like a real phone scan: 6 mm depth noise everywhere, the desk's noise touching the object, stray points. */
+    private fun noisyDesk(c: Cloud, mx: Float, mz: Float) {
+        c.noise = 0.006f
+        c.floor(0f, 0.4f, 0.4f, 30000, 0xFFB08A60.toInt())
+        mouse(c, mx, mz, 0.4f)
+        repeat(400) { c.add((c.rnd.nextFloat() - 0.5f) * 0.8f, c.rnd.nextFloat() * 0.3f, (c.rnd.nextFloat() - 0.5f) * 0.8f, 0f, 1f, 0f, 0xFF808080.toInt(), 0.02f) }
+        // a keyboard-like box and a mug elsewhere on the desk
+        for (k in 0 until 6000) { val x = -0.25f + c.rnd.nextFloat() * 0.3f; val z = 0.15f + c.rnd.nextFloat() * 0.12f; c.add(x, 0.025f, z, 0f, 1f, 0f, 0xFF303030.toInt()) }
+        c.turned(0.25f, 0.2f, 0f, 0.09f, 5000, { 0xFFE8E8E8.toInt() }) { 0.04f }
+        c.noise = 0.002f
+    }
+
+    @Test fun noisyMouseNamedByTheAiIsStillBuilt() {
+        val c = Cloud(); noisyDesk(c, 0.05f, -0.1f)
+        for (level in intArrayOf(0, 2)) {
+            val s = SmartModel.build(c.size, c.p.toFloatArray(), c.n.toFloatArray(), c.c.toIntArray(), null,
+                SmartOptions(level, 0, true, false, "", listOf(PartLabel(0.05f, 0.035f, -0.1f, "mouse", 0.07f))))!!
+            show("noisy mouse L$level", s)
+            val m = s.parts.single { it.name == "mouse" }
+            assertEquals("freeform", m.kind)
+            val box = groupBox(s.mesh, m.group)
+            assertEquals("on the desk", 0f, box[1], 0.008f)
+            assertTrue("height ${box[4]}", box[4] in 0.025f..0.05f)
+            assertTrue("length ${m.length}", m.length in 0.09f..0.15f)
+            assertTrue("width ${m.radius * 2}", m.radius * 2 in 0.045f..0.09f)
+            assertTrue(volume(s.mesh, m.group) > 0f)
+        }
+    }
+
+    @Test fun anyNamedObjectGetsAModel() {
+        // A name the program has no family for: whatever is there is still built, as a free form.
+        val c = Cloud(); noisyDesk(c, 0.05f, -0.1f)
+        val s = SmartModel.build(c.size, c.p.toFloatArray(), c.n.toFloatArray(), c.c.toIntArray(), null,
+            SmartOptions(1, 0, true, false, "", listOf(PartLabel(0.05f, 0.03f, -0.1f, "spillatrice"))))!!
+        show("named stapler", s)
+        val m = s.parts.single { it.name == "spillatrice" }
+        assertTrue(m.labelled)
+        assertTrue(m.length in 0.08f..0.16f)
+    }
+
+    /** What the phone keeps: the app's own voxel map (1.5 cm, or 5 mm on the selected object). */
+    private fun voxelize(c: Cloud, voxel: Float, fineNear: FloatArray? = null): Cloud {
+        val map = com.frak89.cloudyscanner.core.PointMap(voxel)
+        for (i in 0 until c.size) {
+            val x = c.p[i * 3]; val y = c.p[i * 3 + 1]; val z = c.p[i * 3 + 2]
+            val fine = fineNear != null && (x - fineNear[0]) * (x - fineNear[0]) + (z - fineNear[2]) * (z - fineNear[2]) < 0.1f * 0.1f && y > 0.004f
+            var nx = c.n[i * 3]; var ny = c.n[i * 3 + 1]; var nz = c.n[i * 3 + 2]
+            val l = sqrt(nx * nx + ny * ny + nz * nz); nx /= l; ny /= l; nz /= l
+            map.insert(x, y, z, nx, ny, nz, c.c[i], 0.8f, fine, 1, 1f, fine)
+        }
+        val o = Cloud()
+        for (i in 0 until map.size) { for (k in 0..2) { o.p.add(map.pos[i * 3 + k]); o.n.add(map.nrm[i * 3 + k]) }; o.c.add(map.col[i]) }
+        return o
+    }
+
+    @Test fun phoneResolutionMouseIsBuilt() {
+        val raw = Cloud(); noisyDesk(raw, 0.05f, -0.1f)
+        for ((label, cl) in listOf("1.5 cm" to voxelize(raw, 0.015f), "5 mm sul mouse" to voxelize(raw, 0.015f, floatArrayOf(0.05f, 0f, -0.1f)))) {
+            val n = (0 until cl.size).count { val x = cl.p[it * 3] - 0.05f; val z = cl.p[it * 3 + 2] + 0.1f; x * x + z * z < 0.07f * 0.07f && cl.p[it * 3 + 1] > 0.006f }
+            for (level in intArrayOf(0, 2)) {
+                val s = SmartModel.build(cl.size, cl.p.toFloatArray(), cl.n.toFloatArray(), cl.c.toIntArray(), null,
+                    SmartOptions(level, 0, true, false, "", listOf(PartLabel(0.05f, 0.03f, -0.1f, "mouse", 0.07f))))!!
+                show("phone $label ($n punti sul mouse) L$level", s)
+                val m = s.parts.single { it.name == "mouse" }
+                assertEquals("freeform", m.kind)
+                val box = groupBox(s.mesh, m.group)
+                assertTrue("height ${box[4]}", box[4] in 0.02f..0.055f)
+                assertTrue("length ${m.length}", m.length in 0.08f..0.16f)
+                assertTrue("width ${m.radius * 2}", m.radius * 2 in 0.04f..0.1f)
+                assertTrue(volume(s.mesh, m.group) > 0f)
+                val mug = s.parts.filter { it.kind == "revolution" && abs(it.center[0] - 0.25f) < 0.03f }
+                assertTrue("the mug stays a mug: " + mug.joinToString { it.dims }, mug.isNotEmpty() && mug.all { it.radius < 0.06f })
+            }
+        }
     }
 }
 

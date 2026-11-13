@@ -83,6 +83,17 @@ L'OBJ esportato ha un oggetto con nome per ogni solido, quads e N-goni, ombreggi
   quando l'oggetto lo è. LOW ≈ 30 vertici, HIGH ≈ 170 e curvo. Se l'IA lo riconosce (mouse, telecomando, controller,
   scarpa, sasso…) prende tutti i suoi punti anche quando la scansione li aveva scambiati per un cilindro o delle facce, e
   il modello si rifà da solo appena arriva il nome.
+- **Oggetti piccoli e nomi dati da te (v1.6)**:
+  - l'oggetto selezionato viene scansionato con un punto ogni **5 mm** invece di 1,5 cm (Opzioni → «Oggetto selezionato
+    a 5 mm»): un mouse passa da ~80 a ~900 punti;
+  - un oggetto con un nome viene sempre costruito, letto dalla scansione completa attorno al punto nominato, anche
+    se è piccolo, rumoroso o fatto a pezzi dal resto dell'analisi; con pochissimi punti diventa un ovale con le sue misure;
+  - **Oggetto ▾ → Dì cos'è**: scrivi tu il nome. L'app lo salva in **memoria** (Download/CloudyScanner/memoria_oggetti:
+    misure, colore, foto) e la volta dopo riconosce lo stesso oggetto da misure e colore anche senza IA; all'IA le foto
+    degli oggetti già noti vengono mostrate come esempi;
+  - **immagini di riferimento da internet** (Wikimedia Commons, si invia solo il nome dell'oggetto): salvate con
+    l'oggetto e, quando l'IA non è sicura, mostrate accanto alla foto per confermare. Si spengono in Opzioni;
+  - «Tieni i dettagli irregolari» ora è spento di base: niente più pelle densa attorno agli oggetti.
 - **Foto automatiche anche senza oggetto selezionato**: il pianificatore inquadra tutta la scena e chiede le viste che
   mancano, scartando quelle mosse o doppie.
 

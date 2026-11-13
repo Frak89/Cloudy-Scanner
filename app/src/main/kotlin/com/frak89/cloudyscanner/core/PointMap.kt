@@ -40,6 +40,12 @@ class PointMap(val voxel: Float = 0.015f, val maxPoints: Int = 1_500_000) {
     fun keyOf(x: Float, y: Float, z: Float): Long =
         LongIntMap.pack(floor(x * inv).toInt(), floor(y * inv).toInt(), floor(z * inv).toInt())
 
+    /** Finer grid (a third of [voxel]) for the selected object, in its own key space. */
+    val fineVoxel get() = voxel / 3f
+    private val invFine = 3f / voxel
+    fun fineKeyOf(x: Float, y: Float, z: Float): Long =
+        LongIntMap.pack(floor(x * invFine).toInt(), floor(y * invFine).toInt(), floor(z * invFine).toInt()) or FINE_BIT
+
     fun indexOf(key: Long): Int = index.get(key)
 
     /**
@@ -49,20 +55,27 @@ class PointMap(val voxel: Float = 0.015f, val maxPoints: Int = 1_500_000) {
      */
     fun insert(
         x: Float, y: Float, z: Float, nx: Float, ny: Float, nz: Float,
-        color: Int, w: Float, subject: Boolean, frame: Int, boost: Float = 1f,
+        color: Int, w: Float, subject: Boolean, frame: Int, boost: Float = 1f, fine: Boolean = false,
     ): Int {
-        val key = keyOf(x, y, z)
+        val key = if (fine) fineKeyOf(x, y, z) else keyOf(x, y, z)
+        val vs = if (fine) fineVoxel else voxel
+        fun look(px: Float, py: Float, pz: Float) = index.get(if (fine) fineKeyOf(px, py, pz) else keyOf(px, py, pz))
         var i = index.get(key)
+        if (i < 0 && fine) {
+            // The coarse point this fine one replaces (scanned before the object was selected) goes.
+            val c = index.get(keyOf(x, y, z))
+            if (c >= 0) removeAt(c)
+        }
         if (i < 0) {
             // Depth noise scatters a surface over a few voxels along its normal. If this surface
             // already has a sample just in front or behind, refine that one instead of thickening
             // the shell. Opposite-facing samples (the other side of a thin object) are left alone.
             var k = 1
             while (k <= SNAP_VOXELS && i < 0) {
-                val s = voxel * k
-                var j = index.get(keyOf(x + nx * s, y + ny * s, z + nz * s))
+                val s = vs * k
+                var j = look(x + nx * s, y + ny * s, z + nz * s)
                 if (j < 0 || nrm[j * 3] * nx + nrm[j * 3 + 1] * ny + nrm[j * 3 + 2] * nz < 0.5f) {
-                    j = index.get(keyOf(x - nx * s, y - ny * s, z - nz * s))
+                    j = look(x - nx * s, y - ny * s, z - nz * s)
                     if (j >= 0 && nrm[j * 3] * nx + nrm[j * 3 + 1] * ny + nrm[j * 3 + 2] * nz < 0.5f) j = -1
                 }
                 if (j >= 0) i = j
@@ -212,6 +225,7 @@ class PointMap(val voxel: Float = 0.015f, val maxPoints: Int = 1_500_000) {
         const val CONF_GAIN = 0.16f
         const val MAX_WEIGHT = 12f
         const val SNAP_VOXELS = 2
+        const val FINE_BIT = 1L shl 63  // the one bit pack() leaves free
 
         fun lerpColor(a: Int, b: Int, t: Float): Int {
             val ar = (a shr 16) and 255; val ag = (a shr 8) and 255; val ab = a and 255
