@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.frak89.cloudyscanner.SceneTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-11-13T15:51:12.946Z" hostname="runnervmccnms" time="4.378">
+  <properties/>
+  <testcase name="jarNamedByTheAiBecomesHollow" classname="com.frak89.cloudyscanner.SceneTest" time="0.244"/>
+  <testcase name="mouseBecomesOneSmoothFreeFormSolid" classname="com.frak89.cloudyscanner.SceneTest" time="0.489"/>
+  <testcase name="anyNamedObjectGetsAModel" classname="com.frak89.cloudyscanner.SceneTest" time="0.302"/>
+  <testcase name="noisyMouseNamedByTheAiIsStillBuilt" classname="com.frak89.cloudyscanner.SceneTest" time="0.549"/>
+  <testcase name="hourglassIsOneTurnedObjectInTwoColours" classname="com.frak89.cloudyscanner.SceneTest" time="0.483"/>
+  <testcase name="capturedObjectAloneStandsOnTheDeskItWasCutFrom" classname="com.frak89.cloudyscanner.SceneTest" time="0.03"/>
+  <testcase name="phoneResolutionMouseIsBuilt" classname="com.frak89.cloudyscanner.SceneTest" time="0.208"/>
+  <testcase name="mouseNamedByTheAiKeepsItsName" classname="com.frak89.cloudyscanner.SceneTest" time="0.127"/>
+  <testcase name="lightBarIsAnExtrudedVOnARoundedBase" classname="com.frak89.cloudyscanner.SceneTest" time="0.374"/>
+  <testcase name="sideTableBecomesSeparateObjects" classname="com.frak89.cloudyscanner.SceneTest" time="1.073"/>
+  <testcase name="edgesOfTheObjectCorrectANoisyScan" classname="com.frak89.cloudyscanner.SceneTest" time="0.498"/>
+  <system-out><![CDATA[jar: 1 oggetto tornito · 1 faccia piana · 4 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=36 Q=25 N=2 T=62
+  - barattolo di vetro [revolution] Ø 7 × 8 cm at (-0.00, 0.04, -0.00) interno cavo tipico di «barattolo di vetro» (spessore stimato)
+  - Piano bianco [face] 74 × 74 cm at (-0.00, 0.00, -0.00) 
+mouse L0: 1 forma libera · 1 faccia piana · 2 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=29 Q=17 N=1 T=48
+  - Forma libera nero [freeform] 11 × 6 × 3 cm at (0.08, 0.02, -0.05) simmetrico, superficie NURBS
+  - Piano arancione [face] 86 × 87 cm at (-0.00, 0.00, -0.00) 
+mouse L1: 1 forma libera · 1 faccia piana · 2 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=85 Q=65 N=1 T=160
+  - Forma libera nero [freeform] 11 × 6 × 3 cm at (0.08, 0.02, -0.05) simmetrico, superficie NURBS
+  - Piano arancione [face] 86 × 87 cm at (-0.00, 0.00, -0.00) 
+mouse L2: 1 forma libera · 1 faccia piana · 2 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=293 Q=257 N=1 T=576
+  - Forma libera nero [freeform] 11 × 6 × 3 cm at (0.08, 0.02, -0.05) simmetrico, superficie NURBS
+  - Piano arancione [face] 86 × 87 cm at (-0.00, 0.00, -0.00) 
+named stapler: 2 oggetti torniti · 1 forma libera · 1 faccia piana · 4 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=197 Q=145 N=5 T=376
+  - Cilindro bianco [revolution] Ø 8 × 9 cm at (0.25, 0.05, 0.20) 
+  - spillatrice [revolution] Ø 7 × 12 cm at (0.05, 0.01, -0.10) 
+  - Forma libera grigio [freeform] 29 × 13 × 4 cm at (-0.10, 0.02, 0.21) simmetrico, superficie NURBS
+  - Piano arancione [face] 91 × 91 cm at (-0.00, 0.00, -0.00) 
+noisy mouse L0: 1 oggetto tornito · 2 forme libere · 1 faccia piana · 4 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=78 Q=49 N=4 T=138
+  - Cilindro bianco [revolution] Ø 8 × 9 cm at (0.25, 0.05, 0.20) 
+  - mouse [freeform] 12 × 9 × 4 cm at (0.05, 0.02, -0.10) superficie NURBS
+  - Forma libera grigio [freeform] 29 × 13 × 4 cm at (-0.10, 0.02, 0.21) simmetrico, superficie NURBS
+  - Piano arancione [face] 91 × 91 cm at (-0.00, 0.00, -0.00) 
+noisy mouse L2: 1 oggetto tornito · 2 forme libere · 1 faccia piana · 4 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=678 Q=577 N=4 T=1338
+  - Cilindro bianco [revolution] Ø 8 × 9 cm at (0.25, 0.05, 0.20) 
+  - mouse [freeform] 12 × 9 × 4 cm at (0.05, 0.02, -0.10) superficie NURBS
+  - Forma libera grigio [freeform] 29 × 13 × 4 cm at (-0.10, 0.02, 0.21) simmetrico, superficie NURBS
+  - Piano arancione [face] 91 × 91 cm at (-0.00, 0.00, -0.00) 
+hourglass L0: 1 oggetto tornito · 1 faccia piana · 2 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=68 Q=57 N=2 T=126
+  - Solido tornito rosso [revolution] Ø 12 × 26 cm at (0.00, 0.13, -0.00) 
+  - Piano bianco [face] 84 × 85 cm at (-0.00, 0.00, -0.00) 
+hourglass L2: 1 oggetto tornito · 1 faccia piana · 2 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=548 Q=513 N=2 T=1086
+  - Solido tornito rosso [revolution] Ø 12 × 26 cm at (0.00, 0.13, -0.00) 
+  - Piano bianco [face] 84 × 85 cm at (-0.00, 0.00, -0.00) 
+captured alone: 1 forma libera · 1 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=81 Q=64 N=1 T=158
+  - oggetto [freeform] 11 × 6 × 3 cm at (-0.00, 0.02, -0.00) simmetrico, superficie NURBS
+phone 1.5 cm (93 punti sul mouse) L0: 1 oggetto tornito · 2 forme libere · 1 faccia piana · 5 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=78 Q=49 N=4 T=138
+  - Cilindro bianco [revolution] Ø 8 × 9 cm at (0.25, 0.04, 0.20) 
+  - mouse [freeform] 10 × 5 × 3 cm at (0.05, 0.02, -0.10) simmetrico, superficie NURBS
+  - Forma libera grigio [freeform] 29 × 13 × 2 cm at (-0.11, 0.04, 0.20) simmetrico, superficie NURBS
+  - Piano arancione [face] 99 × 98 cm at (0.00, 0.00, 0.00) 
+phone 1.5 cm (93 punti sul mouse) L2: 1 oggetto tornito · 2 forme libere · 1 faccia piana · 5 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=710 Q=609 N=4 T=1402
+  - Solido tornito bianco [revolution] Ø 8 × 9 cm at (0.25, 0.04, 0.20) 
+  - mouse [freeform] 10 × 5 × 3 cm at (0.05, 0.02, -0.10) simmetrico, superficie NURBS
+  - Forma libera grigio [freeform] 29 × 13 × 2 cm at (-0.11, 0.04, 0.20) simmetrico, superficie NURBS
+  - Piano arancione [face] 99 × 98 cm at (0.00, 0.00, 0.00) 
+phone 5 mm sul mouse (895 punti sul mouse) L0: 1 oggetto tornito · 2 forme libere · 1 faccia piana · 5 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=78 Q=49 N=4 T=138
+  - Cilindro bianco [revolution] Ø 8 × 9 cm at (0.25, 0.04, 0.20) 
+  - mouse [freeform] 11 × 7 × 4 cm at (0.05, 0.02, -0.10) simmetrico, superficie NURBS
+  - Forma libera grigio [freeform] 27 × 14 × 2 cm at (-0.10, 0.04, 0.21) simmetrico, superficie NURBS
+  - Piano arancione [face] 98 × 97 cm at (-0.00, 0.00, 0.00) 
+phone 5 mm sul mouse (895 punti sul mouse) L2: 1 oggetto tornito · 2 forme libere · 1 faccia piana · 5 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=710 Q=609 N=4 T=1402
+  - Solido tornito bianco [revolution] Ø 8 × 9 cm at (0.25, 0.04, 0.20) 
+  - mouse [freeform] 11 × 7 × 4 cm at (0.05, 0.02, -0.10) simmetrico, superficie NURBS
+  - Forma libera grigio [freeform] 27 × 14 × 2 cm at (-0.10, 0.04, 0.21) simmetrico, superficie NURBS
+  - Piano arancione [face] 98 × 97 cm at (-0.00, 0.00, 0.00) 
+mouse named: 1 oggetto tornito · 1 forma libera · 1 faccia piana · 5 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=389 Q=321 N=3 T=764
+  - Cilindro bianco [revolution] Ø 8 × 9 cm at (0.18, 0.05, 0.10) 
+  - mouse [freeform] 11 × 7 × 3 cm at (-0.05, 0.02, 0.04) simmetrico, superficie NURBS
+  - Piano arancione [face] 70 × 70 cm at (0.00, 0.00, -0.00) 
+light bar L0: 2 estrusioni · 1 faccia piana · 2 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=34 Q=16 N=4 T=54
+  - Base nero [prism] 9 × 9 × 2 cm at (0.00, 0.01, -0.00) 
+  - Barra bianco [prism] 6 × 4 × 29 cm at (0.00, 0.17, -0.00) 
+  - Piano grigio [face] 96 × 97 cm at (-0.00, 0.00, -0.00) 
+light bar L2: 2 estrusioni · 1 faccia piana · 2 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=48 Q=23 N=4 T=82
+  - Base nero [prism] 9 × 9 × 2 cm at (-0.00, 0.01, 0.00) 
+  - Barra bianco [prism] 6 × 4 × 29 cm at (-0.00, 0.17, -0.00) 
+  - Piano grigio [face] 96 × 97 cm at (-0.00, 0.00, -0.00) 
+side table L0: 7 oggetti torniti · 1 faccia piana · 15 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=120 Q=67 N=14 T=206
+  - Gamba nero [revolution] Ø 3 × 44 cm at (-0.08, 0.22, -0.14) 
+  - Gamba nero 2 [revolution] Ø 3 × 44 cm at (0.16, 0.22, 0.00) 
+  - Gamba nero 3 [revolution] Ø 3 × 44 cm at (-0.08, 0.22, 0.14) 
+  - Disco arancione [revolution] Ø 40 × 2 cm at (-0.00, 0.44, -0.00) 
+  - Disco sottile rosso [revolution] Ø 40 × 0.3 cm at (-0.00, 0.45, -0.00) 
+  - Disco blu [revolution] Ø 22 × 3 cm at (-0.00, 0.47, -0.00) 
+  - Cilindro arancione [revolution] Ø 7 × 6 cm at (-0.00, 0.51, -0.00) 
+  - Piano marrone [face] 127 × 126 cm at (0.00, 0.00, -0.00) 
+side table L1: 7 oggetti torniti · 1 faccia piana · 15 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=228 Q=137 N=14 T=422
+  - Gamba nero [revolution] Ø 3 × 44 cm at (-0.08, 0.22, -0.14) 
+  - Gamba nero 2 [revolution] Ø 3 × 44 cm at (0.16, 0.22, 0.00) 
+  - Gamba nero 3 [revolution] Ø 3 × 44 cm at (-0.08, 0.22, 0.14) 
+  - Disco arancione [revolution] Ø 40 × 2 cm at (-0.00, 0.44, -0.00) 
+  - Disco sottile rosso [revolution] Ø 40 × 0.3 cm at (-0.00, 0.45, -0.00) 
+  - Disco blu [revolution] Ø 22 × 3 cm at (-0.00, 0.47, -0.00) 
+  - Cilindro arancione [revolution] Ø 7 × 6 cm at (-0.00, 0.51, -0.00) 
+  - Piano marrone [face] 127 × 126 cm at (0.00, 0.00, -0.00) 
+side table L2: 7 oggetti torniti · 1 faccia piana · 15 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=484 Q=305 N=14 T=934
+  - Gamba nero [revolution] Ø 3 × 44 cm at (-0.08, 0.22, -0.14) 
+  - Gamba nero 2 [revolution] Ø 3 × 44 cm at (0.16, 0.22, 0.00) 
+  - Gamba nero 3 [revolution] Ø 3 × 44 cm at (-0.08, 0.22, 0.14) 
+  - Disco arancione [revolution] Ø 40 × 2 cm at (-0.00, 0.44, -0.00) 
+  - Disco sottile rosso [revolution] Ø 40 × 0.3 cm at (-0.00, 0.45, -0.00) 
+  - Disco blu [revolution] Ø 22 × 3 cm at (-0.00, 0.47, -0.00) 
+  - Cilindro arancione [revolution] Ø 7 × 6 cm at (-0.00, 0.51, -0.00) 
+  - Piano marrone [face] 127 × 126 cm at (0.00, 0.00, -0.00) 
+side table named: 7 oggetti torniti · 1 faccia piana · 15 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=308 Q=217 N=14 T=582
+  - Gamba nero [revolution] Ø 3 × 44 cm at (-0.08, 0.22, -0.14) 
+  - Gamba nero 2 [revolution] Ø 3 × 44 cm at (0.16, 0.22, 0.00) 
+  - Gamba nero 3 [revolution] Ø 3 × 44 cm at (-0.08, 0.22, 0.14) 
+  - Disco arancione [revolution] Ø 40 × 2 cm at (-0.00, 0.44, -0.00) 
+  - Disco sottile rosso [revolution] Ø 40 × 0.3 cm at (-0.00, 0.45, -0.00) 
+  - piatto [revolution] Ø 22 × 3 cm at (-0.00, 0.47, -0.00) interno cavo tipico di «piatto» (spessore stimato)
+  - candela [revolution] Ø 7 × 9 cm at (-0.00, 0.50, -0.00) incavo in cima tipico di una candela, non misurato
+  - Piano marrone [face] 127 × 126 cm at (0.00, 0.00, -0.00) 
+noisy, depth only: 1 oggetto tornito · 2 forme libere · 1 faccia piana · 4 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=678 Q=577 N=4 T=1338
+  - Cilindro bianco [revolution] Ø 8 × 9 cm at (0.25, 0.05, 0.20) 
+  - mouse [freeform] 12 × 9 × 4 cm at (0.05, 0.02, -0.10) superficie NURBS
+  - Forma libera grigio [freeform] 29 × 13 × 4 cm at (-0.10, 0.02, 0.21) simmetrico, superficie NURBS
+  - Piano arancione [face] 91 × 91 cm at (-0.00, 0.00, -0.00) 
+noisy + 12 outlines: 1 oggetto tornito · 2 forme libere · 1 faccia piana · 4 allineamenti (verticale, squadra, spessori uguali, appoggi)
+  V=678 Q=577 N=4 T=1338
+  - Cilindro bianco [revolution] Ø 8 × 9 cm at (0.25, 0.05, 0.20) 
+  - mouse [freeform] 12 × 7 × 4 cm at (0.05, 0.02, -0.10) superficie NURBS, contorni da 12 viste, 139 punti corretti
+  - Forma libera grigio [freeform] 29 × 13 × 4 cm at (-0.10, 0.02, 0.21) simmetrico, superficie NURBS
+  - Piano arancione [face] 91 × 91 cm at (-0.00, 0.00, -0.00) 
+  size error: depth only 2.5 cm, with outlines 1.0 cm
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

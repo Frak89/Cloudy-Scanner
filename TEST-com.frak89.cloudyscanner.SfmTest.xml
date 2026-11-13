@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.frak89.cloudyscanner.SfmTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-11-13T15:51:17.327Z" hostname="runnervmccnms" time="0.022">
+  <properties/>
+  <testcase name="normalsOfASparsePlaneFaceTheCamera" classname="com.frak89.cloudyscanner.SfmTest" time="0.016"/>
+  <testcase name="twoViewsTriangulateAndThirdRefines" classname="com.frak89.cloudyscanner.SfmTest" time="0.006"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

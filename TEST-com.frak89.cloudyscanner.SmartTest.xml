@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.frak89.cloudyscanner.SmartTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-11-13T15:51:17.351Z" hostname="runnervmccnms" time="0.786">
+  <properties/>
+  <testcase name="roundTableIsOneSolidSquaredUpOnTheFloor" classname="com.frak89.cloudyscanner.SmartTest" time="0.207"/>
+  <testcase name="canBecomesOneCleanSolidWithChosenSides" classname="com.frak89.cloudyscanner.SmartTest" time="0.307"/>
+  <testcase name="rectangularTableIsASlabOnFourEqualLegs" classname="com.frak89.cloudyscanner.SmartTest" time="0.272"/>
+  <system-out><![CDATA[round table: 1 oggetto tornito · 1 faccia piana · 7 allineamenti (verticale, squadra, spessori uguali, appoggi)  V=100 Q=81 Ngon=2
+  ring heights: [0.0, 0.275, 0.305, 0.71, 0.76]
+  ring radii: [0.025, 0.05, 0.45]
+can N=6: 1 oggetto tornito · 1 allineamenti (verticale, squadra, spessori uguali, appoggi)  V=12 Q=6 Ngon=2
+can N=8: 1 oggetto tornito · 1 allineamenti (verticale, squadra, spessori uguali, appoggi)  V=16 Q=8 Ngon=2
+can N=12: 1 oggetto tornito · 1 allineamenti (verticale, squadra, spessori uguali, appoggi)  V=24 Q=12 Ngon=2
+can hint: 1 oggetto tornito · 1 allineamenti (verticale, squadra, spessori uguali, appoggi) · rifiniture tipiche di una lattina (bordo e coperchio incassato) aggiunte dal tipo di oggetto, non misurate
+table: 4 oggetti torniti · lastra 100×60×4 cm · 1 faccia piana · 24 allineamenti (verticale, squadra, spessori uguali, appoggi)  V=76 Q=39 Ngon=8
+  Gamba_grigio: faces=8 ngons=2 at (-0.44,0.00,0.27)
+  Gamba_grigio_2: faces=8 ngons=2 at (0.44,0.00,-0.21)
+  Gamba_grigio_3: faces=8 ngons=2 at (0.44,0.00,0.27)
+  Gamba_grigio_4: faces=8 ngons=2 at (-0.44,0.00,-0.21)
+  Piano_grigio: faces=1 ngons=0 at (-0.80,0.00,0.59)
+  Lastra_grigio: faces=6 ngons=0 at (-0.50,0.74,0.30)
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

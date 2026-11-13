@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.frak89.cloudyscanner.NurbsTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-11-13T15:51:11.879Z" hostname="runnervmccnms" time="0.919">
+  <properties/>
+  <testcase name="ballOnFloorIsNotMistakenForATube" classname="com.frak89.cloudyscanner.NurbsTest" time="0.451"/>
+  <testcase name="roundTableWithSteppedLeg" classname="com.frak89.cloudyscanner.NurbsTest" time="0.175"/>
+  <testcase name="survivesPhoneLevelNoise" classname="com.frak89.cloudyscanner.NurbsTest" time="0.065"/>
+  <testcase name="exactSurfaces" classname="com.frak89.cloudyscanner.NurbsTest" time="0.033"/>
+  <testcase name="pipeWithNinetyDegreeBend" classname="com.frak89.cloudyscanner.NurbsTest" time="0.194"/>
+  <system-out><![CDATA[ball: 1 piano · spiega il 51% dei punti
+table: 2 tubi (Ø 10 cm, 5 cm) · 1 disco (Ø 90 cm) · 1 piano · spiega il 100% dei punti
+noisy: 1 tubo (Ø 11 cm) · spiega il 100% dei punti
+pipe: 2 tubi (Ø 7 cm, 7 cm) · 1 curva (90°) · spiega il 100% dei punti
+  tube r=0.0339 d=(1.0000,0.0006,-0.0012) len=0.501
+  tube r=0.0340 d=(0.0007,1.0000,0.0006) len=0.416
+  elbow angle=89.9 rb=0.070 c=(0.500,0.070,0.001)
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

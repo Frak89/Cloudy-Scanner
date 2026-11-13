@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.frak89.cloudyscanner.CoreTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-11-13T15:51:08.731Z" hostname="runnervmccnms" time="0.406">
+  <properties/>
+  <testcase name="sphereMeshIsClosedOrientedAndAccurate" classname="com.frak89.cloudyscanner.CoreTest" time="0.257"/>
+  <testcase name="hashMapMatchesReference" classname="com.frak89.cloudyscanner.CoreTest" time="0.083"/>
+  <testcase name="strayFragmentIsFoundAndRemoved" classname="com.frak89.cloudyscanner.CoreTest" time="0.041"/>
+  <testcase name="directorParsesModelAnswers" classname="com.frak89.cloudyscanner.CoreTest" time="0.019"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

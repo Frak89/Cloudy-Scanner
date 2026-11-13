@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.frak89.cloudyscanner.ObjectTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-11-13T15:51:12.801Z" hostname="runnervmccnms" time="0.141">
+  <properties/>
+  <testcase name="sharpnessSeparatesCrispBlurredAndFlat" classname="com.frak89.cloudyscanner.ObjectTest" time="0.017"/>
+  <testcase name="plannerMeasuresTheViewRelativeToTheFirstSide" classname="com.frak89.cloudyscanner.ObjectTest" time="0.0"/>
+  <testcase name="plannerKeepsOneGoodPhotoPerViewAndDropsTheRest" classname="com.frak89.cloudyscanner.ObjectTest" time="0.003"/>
+  <testcase name="paletteReducesTo256AndStaysClose" classname="com.frak89.cloudyscanner.ObjectTest" time="0.111"/>
+  <testcase name="shapeComplexityFromNormals" classname="com.frak89.cloudyscanner.ObjectTest" time="0.005"/>
+  <testcase name="recognitionAnswersAreParsed" classname="com.frak89.cloudyscanner.ObjectTest" time="0.004"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

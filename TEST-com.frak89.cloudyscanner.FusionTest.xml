@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.frak89.cloudyscanner.FusionTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-11-13T15:51:09.140Z" hostname="runnervmccnms" time="2.735">
+  <properties/>
+  <testcase name="outlineFollowsTheObjectsEdges" classname="com.frak89.cloudyscanner.FusionTest" time="0.206"/>
+  <testcase name="orbitScanTracksSubjectAdaptsToMotionAndGuidesRescans" classname="com.frak89.cloudyscanner.FusionTest" time="2.352"/>
+  <testcase name="focusModeScansOnlyTheSelectedObject" classname="com.frak89.cloudyscanner.FusionTest" time="0.099"/>
+  <testcase name="smallObjectIsCutFromTheFloorAndScannedFine" classname="com.frak89.cloudyscanner.FusionTest" time="0.077"/>
+  <system-out><![CDATA[  outlines: 20, cut at y=-0.989
+  inside the ball: 24/24, outside the wider ring: 24/24
+  orbit k=29 votes=0 hits=0/263 speed=0.14 moving=false
+  orbit k=59 votes=0 hits=0/263 speed=0.14 moving=false
+  orbit k=89 votes=0 hits=0/263 speed=0.14 moving=false
+  orbit k=119 votes=0 hits=0/263 speed=0.14 moving=false
+  weak ratio by radius(0.5m bands): 7%/14597, 4%/12222, 5%/19527, 10%/25381, 21%/30078, 35%/32749, 46%/33084, 71%/32183
+uncertain after orbit=12594 guidance=true
+points=199821 integMs=5.1 stride=1
+onSphere=10550 onFloor=189271 off=0 badNormals=494 subjectFlag=10516 farSubject=0
+subject valid=true locked=true dist=1.48 center=(-0.01,-0.46,-1.73) moving=false px=2383
+mesh V=62558 Q=58980 T=122616
+after move: staleFront=14 freshFront=5120 movingSeen=true subject=(0.17,-0.47,-1.73) locked=true
+guidance active=true at (0.44,-1.00,1.35) count=155 uncertain=24454
+after revisit: resolvedAfterFrames=5 active=false resolved=10 uncertain=2628
+FUSION OK
+focus: points=9882 far=0 notSubject=0 extent=1.14 fill=0.21 inside=true
+  small object: extent=0.125 support=-1.000 ball=1017 other=0
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
