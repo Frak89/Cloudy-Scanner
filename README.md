@@ -78,6 +78,11 @@ L'OBJ esportato ha un oggetto con nome per ogni solido, quads e N-goni, ombreggi
   oggetto o farlo **riconoscere all'IA**: ritaglia l'oggetto dalla foto migliore e chiede al modello che cos'è. Il nome
   cambia la forma: *piatto*, *ciotola*, *barattolo*, *vaso* diventano cavi; *candela* ha l'incavo dello stoppino;
   *lattina* bordo e coperchio. L'IA live dà il nome all'oggetto selezionato da sola. Il catalogo si esporta in CSV.
+- **Forme libere (v1.5)**: ciò che non è tornito né a lati dritti (un mouse, un telecomando, un sasso) diventa un solido
+  pulito: l'impronta vista dall'alto e una cupola di altezze misurate, ad anelli più fitti verso il bordo, resa simmetrica
+  quando l'oggetto lo è. LOW ≈ 30 vertici, HIGH ≈ 170 e curvo. Se l'IA lo riconosce (mouse, telecomando, controller,
+  scarpa, sasso…) prende tutti i suoi punti anche quando la scansione li aveva scambiati per un cilindro o delle facce, e
+  il modello si rifà da solo appena arriva il nome.
 - **Foto automatiche anche senza oggetto selezionato**: il pianificatore inquadra tutta la scena e chiede le viste che
   mancano, scartando quelle mosse o doppie.
 

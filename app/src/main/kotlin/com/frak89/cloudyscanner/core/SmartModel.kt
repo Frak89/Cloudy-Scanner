@@ -619,10 +619,16 @@ object SmartModel {
         }
     }
 
+    /** Things with no axis and no straight sides: modelled as a measured dome over their footprint. */
+    private val FREEFORM = listOf("mouse", "topo", "telecomando", "controller", "gamepad", "joypad", "joystick", "cuffi", "auricolar",
+        "scarp", "ciabatt", "sasso", "pietra", "ciottol", "saponett", "spugn", "peluche", "pupazz", "cuscin", "borsa", "zaino",
+        "portafogli", "astucci", "banana", "patata", "pane", "cornett", "croissant", "guant", "casco", "trackball", "caricabatt", "powerbank")
+
     /** Object families whose usual shape the scan cannot resolve (a candle's hollow top…). */
     fun templateOf(name: String): String? {
         val h = name.lowercase()
         return when {
+            FREEFORM.any { h.contains(it) } -> "freeform"
             h.contains("lattin") -> "can"
             h.contains("candel") || h.contains("cero") -> "candle"
             listOf("tovagliett", "sottopiatt", "centrin", "tappetin", "sottobicchier", "presina").any { h.contains(it) } -> "thin"
@@ -737,9 +743,12 @@ object SmartModel {
     // ------------------------------------------------------------------ objects found from their shape alone
 
     /** Connected groups (2 cm grid) of the points nothing has explained yet. */
-    private fun components(fit: FitResult, used: BooleanArray): List<IntArray> {
+    private fun components(fit: FitResult, used: BooleanArray): List<IntArray> =
+        groups(fit, (fit.px.indices).filter { !used[it] && fit.owner[it] == -1 }).filter { it.size >= 150 }
+
+    /** Connected groups (2 cm grid) of the given points. */
+    private fun groups(fit: FitResult, idx: List<Int>): List<IntArray> {
         val cell = 0.02f; val inv = 1f / cell
-        val idx = (fit.px.indices).filter { !used[it] && fit.owner[it] == -1 }
         if (idx.isEmpty()) return emptyList()
         val grid = LongIntMap(idx.size)
         val cellOf = LongArray(idx.size)
@@ -767,7 +776,7 @@ object SmartModel {
         }
         val lists = Array(nl) { ArrayList<Int>() }
         for ((q, i) in idx.withIndex()) lists[label[grid.get(cellOf[q])]].add(i)
-        return lists.filter { it.size >= 150 }.map { it.toIntArray() }
+        return lists.map { it.toIntArray() }
     }
 
     /**
@@ -976,6 +985,221 @@ object SmartModel {
         b.endGroup(name)
     }
 
+    // ------------------------------------------------------------------ free-form objects
+
+    /**
+     * Something with no axis and no straight sides (a mouse, a remote, a stone): the footprint
+     * seen from above, as a radius every 360/M degrees around its centre, and a dome of measured
+     * heights over it in K rings. Mirror-symmetric shapes are made exactly symmetric.
+     */
+    private class Blob(val cx: Float, val cz: Float, val ux: Float, val uz: Float, val y0: Float,
+                       val rad: FloatArray, val h: Array<FloatArray>, val hc: Float, val color: Int, val sym: Boolean) {
+        var name = ""; var labelled = false
+        fun dir(j: Int): FloatArray { val a = 2.0 * Math.PI * j / rad.size; val c = cos(a).toFloat(); val s = sin(a).toFloat(); return floatArrayOf(ux * c - uz * s, uz * c + ux * s) }
+        fun height(): Float { var t = hc; for (r in h) for (v in r) t = max(t, v); return t }
+        fun scale(k: Int) = ringScale(k, h.size)
+        fun center() = floatArrayOf(cx, y0 + height() / 2, cz)
+        private fun extent(c: Boolean): Float {
+            var lo = 0f; var hi = 0f
+            for (j in rad.indices) { val a = 2.0 * Math.PI * j / rad.size; val q = rad[j] * (if (c) cos(a) else sin(a)).toFloat(); lo = min(lo, q); hi = max(hi, q) }
+            return hi - lo
+        }
+        fun length() = extent(true)
+        fun width() = extent(false)
+    }
+
+    /** Rings crowd toward the edge, where a rounded object curves most. */
+    private fun ringScale(k: Int, K: Int) = cos(k.toDouble() / K * Math.PI / 2).toFloat()
+
+    /** Height of the face something stands on: the highest horizontal face just under it, or its own lowest points. */
+    private fun support(fit: FitResult, pts: IntArray, cx: Float, cz: Float): Float {
+        val ys = FloatArray(pts.size) { fit.py[pts[it]] }; ys.sort()
+        val low = ys[(ys.size * 0.02f).toInt()]
+        var best = -Float.MAX_VALUE
+        for (p in fit.planes) {
+            if (abs(p.n[1]) < 0.9f) continue
+            val py = p.c[1]
+            if (py > low + 0.012f || py < low - 0.04f) continue
+            val x = cx - p.c[0]; val z = cz - p.c[2]
+            val under = if (p.disc) x * x + z * z < (p.radius + 0.02f) * (p.radius + 0.02f)
+                else abs(x * p.u[0] + z * p.u[2]) < p.hu + 0.02f && abs(x * p.v[0] + z * p.v[2]) < p.hv + 0.02f
+            if (under && py > best) best = py
+        }
+        return if (best > -Float.MAX_VALUE) best else low
+    }
+
+    private fun blob(fit: FitResult, comp: IntArray, level: Int): Blob? {
+        if (comp.size < 150) return null
+        var mx = 0f; var mz = 0f
+        for (i in comp) { mx += fit.px[i]; mz += fit.pz[i] }
+        mx /= comp.size; mz /= comp.size
+        val y0 = support(fit, comp, mx, mz)
+        val idx = comp.filter { fit.py[it] > y0 + 0.004f }
+        if (idx.size < 100) return null
+        val ys = idx.map { fit.py[it] - y0 }.sorted()
+        val hTop = ys[(ys.size * 0.98f).toInt().coerceAtMost(ys.size - 1)]
+        if (hTop < 0.008f) return null
+        val poly = outline(fit, idx, 2) ?: return null
+        // centre of the footprint and its long direction
+        var a2 = 0f; var gx = 0f; var gz = 0f
+        for (k in poly.indices) { val p = poly[k]; val q = poly[(k + 1) % poly.size]; val cr = p[0] * q[1] - q[0] * p[1]; a2 += cr; gx += (p[0] + q[0]) * cr; gz += (p[1] + q[1]) * cr }
+        if (abs(a2) < 1e-6f) return null
+        val cx = gx / (3 * a2); val cz = gz / (3 * a2)
+        var sxx = 0.0; var szz = 0.0; var sxz = 0.0
+        for (i in idx) { val x = fit.px[i] - cx; val z = fit.pz[i] - cz; sxx += x * x; szz += z * z; sxz += x * z }
+        val th = 0.5 * atan2(2 * sxz, sxx - szz)
+        val ux = cos(th).toFloat(); val uz = sin(th).toFloat()
+        val M = intArrayOf(8, 12, 24)[level]; val K = intArrayOf(2, 3, 5)[level]
+        // footprint radius every 360/M degrees: farthest crossing of the outline
+        val rad = FloatArray(M)
+        for (j in 0 until M) {
+            val a = 2.0 * Math.PI * j / M; val c = cos(a).toFloat(); val sn = sin(a).toFloat()
+            val dx = ux * c - uz * sn; val dz = uz * c + ux * sn
+            var best = -1f
+            for (k in poly.indices) {
+                val p = poly[k]; val q = poly[(k + 1) % poly.size]
+                val ex = q[0] - p[0]; val ez = q[1] - p[1]
+                val den = dx * ez - dz * ex
+                if (abs(den) < 1e-9f) continue
+                val wx = p[0] - cx; val wz = p[1] - cz
+                val t = (wx * ez - wz * ex) / den; val u = (wx * dz - wz * dx) / den
+                if (t > 0f && u >= 0f && u <= 1f) best = max(best, t)
+            }
+            if (best <= 0f) return null
+            rad[j] = best
+        }
+        val meanR = rad.average().toFloat()
+        // heights: high percentile of the points around each vertex
+        val cell = 0.01f
+        val grid = HashMap<Long, ArrayList<Int>>()
+        for (i in idx) grid.getOrPut(LongIntMap.pack(floor(fit.px[i] / cell).toInt(), 0, floor(fit.pz[i] / cell).toInt())) { ArrayList() }.add(i)
+        fun heightAt(x: Float, z: Float, r: Float, pct: Float): Float {
+            val l = ArrayList<Float>()
+            val n = (r / cell).toInt() + 1
+            val bx = floor(x / cell).toInt(); val bz = floor(z / cell).toInt()
+            for (dz in -n..n) for (dx in -n..n) {
+                val cl = grid[LongIntMap.pack(bx + dx, 0, bz + dz)] ?: continue
+                for (i in cl) { val ox = fit.px[i] - x; val oz = fit.pz[i] - z; if (ox * ox + oz * oz <= r * r) l.add(fit.py[i] - y0) }
+            }
+            if (l.size < 3) return Float.NaN
+            l.sort()
+            return l[(l.size * pct).toInt().coerceAtMost(l.size - 1)]
+        }
+        val h = Array(K) { FloatArray(M) }
+        for (k in 0 until K) {
+            // the rim is read just inside the outline, where the top of the side wall is
+            val sc = if (k == 0) 0.985f else ringScale(k, K)
+            val gap = meanR * (ringScale(max(0, k - 1), K) - ringScale(k + 1, K)) / 2
+            for (j in 0 until M) {
+                val a = 2.0 * Math.PI * j / M; val c = cos(a).toFloat(); val sn = sin(a).toFloat()
+                val rr = rad[j] * sc
+                val r = (0.4f * min(max(gap, 0.004f), (2 * Math.PI * rr / M).toFloat().coerceAtLeast(0.006f))).coerceIn(0.004f, 0.015f)
+                h[k][j] = heightAt(cx + (ux * c - uz * sn) * rr, cz + (uz * c + ux * sn) * rr, r, if (k == 0) 0.85f else 0.6f)
+            }
+        }
+        var hc = heightAt(cx, cz, (0.3f * meanR * ringScale(K - 1, K)).coerceIn(0.005f, 0.015f), 0.6f)
+        // fill what was not seen from its neighbours
+        repeat(12) {
+            for (k in 0 until K) for (j in 0 until M) if (h[k][j].isNaN()) {
+                var s = 0f; var n = 0
+                for (v in floatArrayOf(h[k][(j + 1) % M], h[k][(j + M - 1) % M], if (k > 0) h[k - 1][j] else Float.NaN, if (k < K - 1) h[k + 1][j] else hc))
+                    if (!v.isNaN()) { s += v; n++ }
+                if (n > 0) h[k][j] = s / n
+            }
+            if (hc.isNaN()) { val l = h[K - 1].filter { !it.isNaN() }; if (l.isNotEmpty()) hc = l.average().toFloat() }
+        }
+        if (hc.isNaN()) hc = hTop
+        for (k in 0 until K) for (j in 0 until M) if (h[k][j].isNaN()) h[k][j] = hc * (k + 1f) / (K + 1f)
+        // mirror symmetry about the long direction
+        var dr = 0f; var dh = 0f
+        for (j in 0 until M) { val m = (M - j) % M; dr += abs(rad[j] - rad[m]); for (k in 0 until K) dh += abs(h[k][j] - h[k][m]) }
+        val sym = dr / M < 0.1f * meanR && dh / (M * K) < max(0.004f, 0.15f * hTop)
+        if (sym) for (j in 0..M / 2) {
+            val m = (M - j) % M
+            val r = (rad[j] + rad[m]) / 2; rad[j] = r; rad[m] = r
+            for (k in 0 until K) { val v = (h[k][j] + h[k][m]) / 2; h[k][j] = v; h[k][m] = v }
+        }
+        // smooth: a little at low poly (noise only), more at high poly (rounder)
+        repeat(intArrayOf(1, 1, 2)[level]) {
+            // the outline only at high poly, where samples are close enough not to shorten the ends
+            val nr = FloatArray(M) { j -> 0.7f * rad[j] + 0.15f * (rad[(j + 1) % M] + rad[(j + M - 1) % M]) }
+            if (level == 2) nr.copyInto(rad)
+            val nh = Array(K) { k -> FloatArray(M) { j ->
+                val inner = if (k < K - 1) h[k + 1][j] else hc
+                val outer = if (k > 0) h[k - 1][j] else h[k][j]
+                if (k == 0) 0.6f * h[k][j] + 0.2f * (h[k][(j + 1) % M] + h[k][(j + M - 1) % M])
+                else 0.5f * h[k][j] + 0.125f * (h[k][(j + 1) % M] + h[k][(j + M - 1) % M] + inner + outer)
+            } }
+            for (k in 0 until K) nh[k].copyInto(h[k])
+        }
+        for (k in 0 until K) for (j in 0 until M) h[k][j] = h[k][j].coerceIn(0.002f, hTop * 1.02f)
+        return Blob(cx, cz, ux, uz, y0, rad, h, hc.coerceIn(0.002f, hTop * 1.02f), dominantColor(fit.col, idx), sym)
+    }
+
+    /** One face, turned to look away from [o]: triangle, quad or n-gon. */
+    private fun outward(b: Builder, ids: IntArray, o: FloatArray) {
+        var nx = 0f; var ny = 0f; var nz = 0f; var gx = 0f; var gy = 0f; var gz = 0f
+        val p = b.pos
+        for (k in ids.indices) {
+            val a = ids[k] * 3; val c = ids[(k + 1) % ids.size] * 3
+            nx += (p[a + 1] - p[c + 1]) * (p[a + 2] + p[c + 2]); ny += (p[a + 2] - p[c + 2]) * (p[a] + p[c]); nz += (p[a] - p[c]) * (p[a + 1] + p[c + 1])
+            gx += p[a]; gy += p[a + 1]; gz += p[a + 2]
+        }
+        val n = ids.size
+        val f = if ((gx / n - o[0]) * nx + (gy / n - o[1]) * ny + (gz / n - o[2]) * nz < 0f) ids.reversedArray() else ids
+        when (f.size) { 3 -> b.tri(f[0], f[1], f[2]); 4 -> b.quad(f[0], f[1], f[2], f[3]); else -> b.ngons.add(f) }
+    }
+
+    private fun blobMesh(b: Builder, bl: Blob, level: Int, name: String) {
+        val M = bl.rad.size; val K = bl.h.size; val c = bl.color
+        val o = floatArrayOf(bl.cx, bl.y0 + 0.4f * bl.height(), bl.cz)
+        fun at(j: Int, sc: Float, y: Float): Int { val d = bl.dir(j); return b.v(bl.cx + d[0] * bl.rad[j] * sc, y, bl.cz + d[1] * bl.rad[j] * sc, c) }
+        val top = Array(K) { k -> IntArray(M) { j -> at(j, bl.scale(k), bl.y0 + bl.h[k][j]) } }
+        val centre = b.v(bl.cx, bl.y0 + bl.hc, bl.cz, c)
+        val base = IntArray(M) { j -> at(j, if (level == 2) 0.94f else 1f, bl.y0) }
+        // high poly: the side bulges out a little above the base, so the bottom edge reads round
+        val mid = if (level == 2) IntArray(M) { j -> at(j, 1.0f, bl.y0 + 0.35f * bl.h[0][j]) } else null
+        for (k in 0 until K - 1) for (j in 0 until M) { val q = (j + 1) % M; outward(b, intArrayOf(top[k][j], top[k][q], top[k + 1][q], top[k + 1][j]), o) }
+        for (j in 0 until M) { val q = (j + 1) % M; outward(b, intArrayOf(top[K - 1][j], top[K - 1][q], centre), o) }
+        val lower = mid ?: base
+        for (j in 0 until M) { val q = (j + 1) % M; outward(b, intArrayOf(lower[j], lower[q], top[0][q], top[0][j]), o) }
+        if (mid != null) for (j in 0 until M) { val q = (j + 1) % M; outward(b, intArrayOf(base[j], base[q], mid[q], mid[j]), o) }
+        outward(b, base.copyOf(), floatArrayOf(bl.cx, bl.y0 + 1f, bl.cz))
+        b.endGroup(name)
+    }
+
+    /**
+     * Points that make up the object at [seed] (or, with no seed, the biggest loose object):
+     * everything connected to it except large faces (the desk) and what lies flat on them.
+     */
+    private fun gather(fit: FitResult, taken: BooleanArray, seed: FloatArray?): IntArray? {
+        fun big(pi: Int): Boolean { val p = fit.planes[pi]; return if (p.disc) 3.1416f * p.radius * p.radius >= 0.06f else 4f * p.hu * p.hv >= 0.06f }
+        val floors = fit.planes.indices.filter { big(it) && abs(fit.planes[it].n[1]) > 0.9f }.map { fit.planes[it] }
+        val cand = fit.px.indices.filter { i ->
+            if (taken[i]) return@filter false
+            val o = fit.owner[i]
+            if (o >= 0 && big(o)) return@filter false
+            floors.none { p ->
+                val x = fit.px[i] - p.c[0]; val y = fit.py[i] - p.c[1]; val z = fit.pz[i] - p.c[2]
+                val d = x * p.n[0] + y * p.n[1] + z * p.n[2]
+                abs(d) < 0.006f && (p.disc || (abs(x * p.u[0] + y * p.u[1] + z * p.u[2]) < p.hu + 0.02f && abs(x * p.v[0] + y * p.v[1] + z * p.v[2]) < p.hv + 0.02f))
+            }
+        }
+        val gs = groups(fit, cand).filter { g ->
+            if (g.size < 150) return@filter false
+            var lo0 = Float.MAX_VALUE; var hi0 = -Float.MAX_VALUE; var lo2 = Float.MAX_VALUE; var hi2 = -Float.MAX_VALUE
+            for (i in g) { lo0 = min(lo0, fit.px[i]); hi0 = max(hi0, fit.px[i]); lo2 = min(lo2, fit.pz[i]); hi2 = max(hi2, fit.pz[i]) }
+            hi0 - lo0 < 0.6f && hi2 - lo2 < 0.6f
+        }
+        if (seed == null) return gs.maxByOrNull { it.size }
+        var best: IntArray? = null; var bd = 0.05f * 0.05f
+        for (g in gs) for (i in g) {
+            val d = (fit.px[i] - seed[0]).let { it * it } + (fit.py[i] - seed[1]).let { it * it } + (fit.pz[i] - seed[2]).let { it * it }
+            if (d < bd) { bd = d; best = g }
+        }
+        return best
+    }
+
     // ------------------------------------------------------------------ catalogue
 
     private fun prismKind(p: Prism): String {
@@ -1073,12 +1297,34 @@ object SmartModel {
         val used = BooleanArray(total) { fit.owner[it] != -1 }
         val b = Builder(); val surf = ArrayList<NurbsSurface>(); val notes = ArrayList<String>()
         val catalog = ArrayList<CatalogPart>(); val taken = HashSet<String>()
-        var nRev = 0; var nSlab = 0; var nFlat = 0; var nPipe = 0; var nPrism = 0
+        var nRev = 0; var nSlab = 0; var nFlat = 0; var nPipe = 0; var nPrism = 0; var nFree = 0
+
+        // ---- objects the AI named as free-form (a mouse…): all their points, whatever the fit made of them
+        val blobs = ArrayList<Blob>()
+        val freeTubes = HashSet<FitTube>(); val freePlanes = HashSet<Int>()
+        run {
+            val seeds = ArrayList<Pair<FloatArray?, String>>()
+            for (l in opt.labels) if (templateOf(l.name) == "freeform") seeds.add(Pair(floatArrayOf(l.x, l.y, l.z), l.name))
+            if (seeds.isEmpty() && opt.hint.isNotBlank() && templateOf(opt.hint) == "freeform") seeds.add(Pair(null, opt.hint))
+            if (seeds.isEmpty()) return@run
+            val taken0 = BooleanArray(total)
+            val tubeTotal = HashMap<FitTube, Int>(); val planeTotal = HashMap<Int, Int>()
+            for (i in 0 until total) { fit.tubeOf.getOrNull(i)?.let { tubeTotal[it] = (tubeTotal[it] ?: 0) + 1 }; if (fit.owner[i] >= 0) planeTotal[fit.owner[i]] = (planeTotal[fit.owner[i]] ?: 0) + 1 }
+            for ((seed, nm) in seeds) {
+                val g = gather(fit, taken0, seed) ?: continue
+                val bl = blob(fit, g, level) ?: continue
+                bl.name = nm; bl.labelled = true; blobs.add(bl)
+                val tc = HashMap<FitTube, Int>(); val pc = HashMap<Int, Int>()
+                for (i in g) { taken0[i] = true; used[i] = true; fit.tubeOf.getOrNull(i)?.let { tc[it] = (tc[it] ?: 0) + 1 }; if (fit.owner[i] >= 0) pc[fit.owner[i]] = (pc[fit.owner[i]] ?: 0) + 1 }
+                for ((t, k) in tc) if (k > 0.5f * (tubeTotal[t] ?: 1)) freeTubes.add(t)
+                for ((pi, k) in pc) if (k > 0.5f * (planeTotal[pi] ?: 1)) freePlanes.add(pi)
+            }
+        }
 
         // ---- group everything that shares an axis
         val axes = ArrayList<Axis>()
         for (t in fit.tubes.sortedByDescending { it.length }) {
-            if (t in joined) continue
+            if (t in joined || t in freeTubes) continue
             var g: Axis? = null
             for (a in axes) {
                 val dd = a.d[0] * t.d[0] + a.d[1] * t.d[1] + a.d[2] * t.d[2]
@@ -1096,9 +1342,9 @@ object SmartModel {
             }
             g.tubeSet.add(t)
         }
-        val planeDone = BooleanArray(fit.planes.size)
+        val planeDone = BooleanArray(fit.planes.size) { it in freePlanes }
         for ((pi, p) in fit.planes.withIndex()) {
-            if (!p.disc) continue
+            if (!p.disc || planeDone[pi]) continue
             var g: Axis? = null
             for (a in axes) {
                 if (abs(a.d[0] * p.n[0] + a.d[1] * p.n[1] + a.d[2] * p.n[2]) < 0.98f) continue
@@ -1145,6 +1391,27 @@ object SmartModel {
 
         // ---- turned objects, split into the separate things stacked on each axis
         val stacks = ArrayList<ArrayList<Part>>()
+        val sunk = HashSet<Axis>()
+        for (a in axes) {
+            // A lying "cylinder" that would sink into the face under it is the round back of
+            // something else (a mouse): give its points back so the object is read whole.
+            if (abs(a.d[1]) > 0.7f || a.discs.isNotEmpty()) continue
+            val m = a.at((a.t0 + a.t1) / 2)
+            var below = -Float.MAX_VALUE
+            for (p in fit.planes) {
+                if (abs(p.n[1]) < 0.9f || p.c[1] > m[1]) continue
+                val x = m[0] - p.c[0]; val z = m[2] - p.c[2]
+                val under = if (p.disc) x * x + z * z < p.radius * p.radius else abs(x * p.u[0] + z * p.u[2]) < p.hu && abs(x * p.v[0] + z * p.v[2]) < p.hv
+                if (under) below = max(below, p.c[1])
+            }
+            if (below == -Float.MAX_VALUE) continue
+            val reach = a.rMax * sqrt(max(0f, 1f - a.d[1] * a.d[1]))
+            if (m[1] - reach < below - 0.3f * a.rMax) {
+                sunk.add(a)
+                for (i in 0 until total) if (fit.tubeOf.getOrNull(i)?.let { it in a.tubeSet } == true) { fit.owner[i] = -1; used[i] = false }
+            }
+        }
+        axes.removeAll(sunk)
         for (a in axes) {
             if (cancel?.invoke() == true) return null
             a.orient()
@@ -1160,8 +1427,11 @@ object SmartModel {
                 val pr = profile(fit, ax, level, used)
                 if (pr != null) { stacks.add(split(ax, pr, level)); continue }
             }
-            val ps = prisms(fit, comp, level) ?: continue
-            prismsAll.addAll(ps)
+            val ps = prisms(fit, comp, level)
+            if (ps != null) { prismsAll.addAll(ps); for (i in comp) used[i] = true; continue }
+            // no axis and no straight sides: a measured dome over its footprint
+            val bl = blob(fit, comp, level) ?: continue
+            blobs.add(bl)
             for (i in comp) used[i] = true
         }
         for (pi in soft) {
@@ -1263,6 +1533,8 @@ object SmartModel {
         for (p in allParts) if (p.name.isEmpty()) p.name = "${kindName(p)} ${Palette.nameOf(p.color)}"
         val prismLabel = matchLabels(opt.labels, prismsAll, { it.center() }, { max(max(it.width(), it.depth()) / 2, (it.y1 - it.y0) / 2) })
         for (p in prismsAll) { val l = prismLabel[p]; if (l != null) { p.name = l.name; p.labelled = true } else p.name = "${prismKind(p)} ${Palette.nameOf(p.color)}" }
+        val blobLabel = matchLabels(opt.labels, blobs.filter { !it.labelled }, { it.center() }, { max(max(it.length(), it.width()) / 2, it.height() / 2) })
+        for (p in blobs) if (!p.labelled) { val l = blobLabel[p]; if (l != null) { p.name = l.name; p.labelled = true } else p.name = "Forma libera ${Palette.nameOf(p.color)}" }
 
         // ---- build the turned objects
         for (st in stacks) {
@@ -1286,7 +1558,7 @@ object SmartModel {
 
         // ---- pipes: tubes joined by bends stay open where they meet
         for (t in fit.tubes) {
-            if (t !in joined) continue
+            if (t !in joined || t in freeTubes) continue
             val ax = Axis(t.a, t.d, t.t0, t.t1, t.r, t.color)
             fun meets(first: Boolean): Boolean {
                 val e = t.end(first)
@@ -1337,6 +1609,16 @@ object SmartModel {
             catalog.add(CatalogPart(gname.replace('_', ' '), p.labelled, "prism", p.center(), max(max(p.width(), p.depth()) / 2, (p.y1 - p.y0) / 2),
                 String.format(Locale.US, "%.0f × %.0f × %.0f cm", p.width() * 100, p.depth() * 100, (p.y1 - p.y0) * 100), p.color, b.groups.size - 1, "",
                 floatArrayOf(0f, 1f, 0f), p.y1 - p.y0, max(p.width(), p.depth()) / 2))
+        }
+
+        // ---- free-form objects
+        for (p in blobs) {
+            val gname = uniqueName(p.name, taken)
+            blobMesh(b, p, level, gname)
+            nFree++
+            catalog.add(CatalogPart(gname.replace('_', ' '), p.labelled, "freeform", p.center(), max(max(p.length(), p.width()) / 2, p.height() / 2),
+                String.format(Locale.US, "%.0f × %.0f × %.0f cm", p.length() * 100, p.width() * 100, p.height() * 100), p.color, b.groups.size - 1,
+                if (p.sym) "simmetrico" else "", floatArrayOf(p.ux, 0f, p.uz), p.length(), p.width() / 2))
         }
 
         // ---- flat faces: slabs where the edge shows a thickness, single faces otherwise
@@ -1412,6 +1694,7 @@ object SmartModel {
 
         val parts = ArrayList<String>()
         if (nRev > 0) parts.add("$nRev oggett${if (nRev == 1) "o tornito" else "i torniti"}")
+        if (nFree > 0) parts.add("$nFree form${if (nFree == 1) "a libera" else "e libere"}")
         if (nPrism > 0) parts.add("$nPrism estrusion${if (nPrism == 1) "e" else "i"}")
         if (nPipe > 0) parts.add("$nPipe tub${if (nPipe == 1) "o" else "i"} con ${fit.elbows.size} curv${if (fit.elbows.size == 1) "a" else "e"}")
         if (nSlab > 0) parts.add(boxes.joinToString(", ") { (p, th) -> String.format(Locale.US, "lastra %.0f×%.0f×%.0f cm", p.hu * 200, p.hv * 200, th * 100) })

@@ -216,6 +216,76 @@ class SceneTest {
         assertTrue(volume(named.mesh, j.group) > 0f)
         assertEquals(8, named.mesh.ngons[named.mesh.groups[j.group].ngonStart].size)
     }
+
+    /** A computer mouse on a desk: egg-shaped footprint 12 x 6.4 cm, a dome 3.8 cm high at the back, turned by [ang]. */
+    fun mouse(c: Cloud, cx: Float, cz: Float, ang: Float, col: Int = 0xFF202024.toInt()) {
+        val a = 0.06f
+        fun halfW(x: Float) = 0.032f * (1f - 0.15f * x / a)
+        fun hgt(x: Float, z: Float): Float {
+            val qx = x / a; val qz = z / halfW(x); val q = qx * qx + qz * qz
+            if (q >= 1f) return 0f
+            val top = 0.038f * (0.72f + 0.28f * (1f - qx) / 2f)
+            return top * Math.pow((1f - q).toDouble(), 0.4).toFloat()
+        }
+        val ca = cos(ang); val sa = sin(ang)
+        var made = 0
+        while (made < 9000) {
+            val x = (c.rnd.nextFloat() * 2 - 1) * a; val z = (c.rnd.nextFloat() * 2 - 1) * 0.04f
+            val h = hgt(x, z); if (h <= 0f) continue
+            val e = 0.0015f
+            var gx = (hgt(x + e, z) - hgt(x - e, z)) / (2 * e); var gz = (hgt(x, z + e) - hgt(x, z - e)) / (2 * e)
+            val gl = sqrt(gx * gx + gz * gz); if (gl > 25f) { gx *= 25f / gl; gz *= 25f / gl }
+            // the steep rim is seen as a side: spread its points down the wall
+            val y = if (gl > 6f) h * c.rnd.nextFloat() else h
+            val nxl = -gx; val nzl = -gz
+            c.add(cx + x * ca - z * sa, y, cz + x * sa + z * ca, nxl * ca - nzl * sa, 1f, nxl * sa + nzl * ca, col)
+            made++
+        }
+    }
+
+    private fun groupBox(m: MeshData, group: Int): FloatArray {
+        val gr = m.groups[group]; val lo = floatArrayOf(1e9f, 1e9f, 1e9f); val hi = floatArrayOf(-1e9f, -1e9f, -1e9f)
+        val vs = (gr.faceStart until gr.faceEnd).flatMap { f -> (0 until 4).map { m.quads[f * 4 + it] } } + (gr.ngonStart until gr.ngonEnd).flatMap { m.ngons[it].toList() }
+        for (v in vs) for (k in 0..2) { lo[k] = minOf(lo[k], m.pos[v * 3 + k]); hi[k] = maxOf(hi[k], m.pos[v * 3 + k]) }
+        return floatArrayOf(lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], vs.toSet().size.toFloat())
+    }
+
+    @Test fun mouseBecomesOneSmoothFreeFormSolid() {
+        val c = Cloud()
+        c.floor(0f, 0.35f, 0.35f, 14000, 0xFFB08A60.toInt())
+        mouse(c, 0.08f, -0.05f, 0.5f)
+        var lastV = 0f
+        for (level in 0..2) {
+            val s = build(c, level)
+            show("mouse L$level", s)
+            val m = s.parts.single { it.kind == "freeform" }
+            val box = groupBox(s.mesh, m.group)
+            assertEquals("sits on the desk", 0f, box[1], 0.004f)
+            assertEquals("3.8 cm high", 0.038f, box[4], 0.006f)
+            assertEquals("footprint centre x", 0.08f, (box[0] + box[3]) / 2, 0.012f)
+            assertTrue("length about 12 cm: ${m.length}", m.length in 0.105f..0.135f)
+            assertTrue("width about 6.4 cm: ${m.radius * 2}", m.radius * 2 in 0.052f..0.076f)
+            assertTrue("closed and outward", volume(s.mesh, m.group) > 0f)
+            assertTrue("no dense skin left", s.parts.none { it.kind == "detail" })
+            assertTrue(Palette0.isWhite(m.color).not() && ((m.color shr 16) and 255) < 70)
+            if (level == 0) assertTrue("low poly: few vertices (${box[6]})", box[6] <= 40f)
+            assertTrue("each level is finer", box[6] > lastV); lastV = box[6]
+        }
+    }
+
+    @Test fun mouseNamedByTheAiKeepsItsName() {
+        val c = Cloud()
+        c.floor(0f, 0.35f, 0.35f, 14000, 0xFFB08A60.toInt())
+        mouse(c, -0.05f, 0.04f, -1.1f)
+        // a mug next to it must stay a turned object
+        c.turned(0.18f, 0.1f, 0f, 0.09f, 6000, { 0xFFE8E8E8.toInt() }) { 0.04f }
+        val s = build(c, 2, listOf(PartLabel(-0.05f, 0.03f, 0.04f, "mouse")))
+        show("mouse named", s)
+        val m = s.parts.single { it.name == "mouse" }
+        assertEquals("freeform", m.kind)
+        assertTrue(m.labelled)
+        assertTrue(s.parts.any { it.kind == "revolution" && abs(it.center[0] - 0.18f) < 0.02f })
+    }
 }
 
 object Palette0 {

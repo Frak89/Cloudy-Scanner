@@ -886,14 +886,18 @@ class MainActivity : Activity(), Director.Ui {
         val before = hud.objLabel
         hud.objLabel = if (r.known) "${r.name} · ${r.confidence}%" else ""
         if (r.level >= 0) { aiLevelKnown = true; photos.delete(planner.setLevel(r.level, false)) }
-        if (r.known && r.confidence >= 60 && engine.subject.valid && engine.subject.locked) {
-            val s = engine.subject
-            putLabel(s.x, s.y, s.z, r.name.lowercase(Locale.ITALIAN))
+        var relabelled = false
+        if (r.known && r.confidence >= 60 && engine.subject.valid) {
+            // The object in view (selected or just framed) gets the name: its shape follows from it.
+            val s = engine.subject; val n = r.name.lowercase(Locale.ITALIAN)
+            relabelled = Opt.labels.none { it.name == n && (it.x - s.x) * (it.x - s.x) + (it.y - s.y) * (it.y - s.y) + (it.z - s.z) * (it.z - s.z) < 0.03f * 0.03f }
+            if (relabelled) putLabel(s.x, s.y, s.z, n)
         }
-        if (r.known && r.confidence >= 60 && !r.name.equals(Opt.objectHint, true)) {
-            // AI boost: knowing what the object is lets the clean model add what such objects always have.
+        if (r.known && r.confidence >= 60 && (relabelled || !r.name.equals(Opt.objectHint, true))) {
+            // AI boost: knowing what the object is lets the clean model build it as such objects are made.
             Opt.objectHint = r.name
-            if (Opt.smart && meshes.mesh != null && meshes.level in 0..2) { say("IA boost: «${r.name}» → rifaccio il modello pulito con le rifiniture tipiche di questo oggetto."); rebuildIfShown() }
+            if (Opt.smart && meshes.mesh != null && meshes.level in 0..2) { say("IA boost: «${r.name}» → rifaccio il modello pulito con la forma tipica di questo oggetto."); rebuildIfShown() }
+            else if (Opt.smart && meshes.mesh == null && map.size > 2000 && !meshes.busy) { say("IA: «${r.name}» → costruisco il modello pulito (Mesh ▾ per LOW/MID/HIGH)."); rebuild(Opt.meshLevel.coerceIn(0, 2)) }
         }
         val nameChanged = !before.startsWith(r.name + " ·")
         if (r.known && nameChanged) {
