@@ -1067,6 +1067,9 @@ object SmartModel {
         var bx0 = Float.MAX_VALUE; var bx1 = -Float.MAX_VALUE; var bz0 = Float.MAX_VALUE; var bz1 = -Float.MAX_VALUE
         for (i in idx) { bx0 = min(bx0, P.x[i]); bx1 = max(bx1, P.x[i]); bz0 = min(bz0, P.z[i]); bz1 = max(bz1, P.z[i]) }
         val spacing = sqrt(max(1e-6f, (bx1 - bx0) * (bz1 - bz0)) / idx.size * 3f).coerceIn(0.003f, 0.025f)
+        // something wide and low is a surface (a board, a patch of floor), not a free-form object
+        val span = sqrt(max(0f, (bx1 - bx0) * (bz1 - bz0)))
+        if (span > 0.2f && hTop < 0.12f * span) return null
         val dom = dominantColor(P.c, idx)
         val poly = (if (idx.size >= 25) outline(P.x, P.z, idx, 2, max(0.005f, 0.6f * spacing), 2) else null)
             ?: return roughBlob(P, idx, y0, hTop, level, dom)
@@ -1813,7 +1816,7 @@ object SmartModel {
         for (p in allParts) if (p.name.isEmpty()) p.name = "${kindName(p)} ${Palette.nameOf(p.color)}"
         val prismLabel = matchLabels(opt.labels, prismsAll, { it.center() }, { max(max(it.width(), it.depth()) / 2, (it.y1 - it.y0) / 2) })
         for (p in prismsAll) { val l = prismLabel[p]; if (l != null) { p.name = l.name; p.labelled = true } else p.name = "${prismKind(p)} ${Palette.nameOf(p.color)}" }
-        val blobLabel = matchLabels(opt.labels, blobs.filter { !it.labelled }, { it.center() }, { max(max(it.length(), it.width()) / 2, it.height() / 2) })
+        val blobLabel = matchLabels(opt.labels.filter { it !in namedDone }, blobs.filter { !it.labelled }, { it.center() }, { max(max(it.length(), it.width()) / 2, it.height() / 2) })
         for (p in blobs) if (!p.labelled) { val l = blobLabel[p]; if (l != null) { p.name = l.name; p.labelled = true } else p.name = "Forma libera ${Palette.nameOf(p.color)}" }
         // A name nothing above took (the object was lost in the noise, or read as bits of
         // faces): build that object anyway from the full scan around the named point.
