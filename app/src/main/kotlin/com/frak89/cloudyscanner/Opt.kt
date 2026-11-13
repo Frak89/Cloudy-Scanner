@@ -4,7 +4,7 @@ package com.frak89.cloudyscanner
 object Opt {
     // View
     @Volatile var orbit = false
-    @Volatile var showCamera = false
+    @Volatile var showCamera = true
     @Volatile var edgeOverlay = false
     @Volatile var showPoints = true
     @Volatile var showSolid = true
@@ -38,6 +38,8 @@ object Opt {
     @Volatile var maxRange = 4f
     @Volatile var minConf = 0.35f
     @Volatile var subjRadius = 0.6f
+    /** Cut the selected object away from the desk/floor it stands on. */
+    @Volatile var cutSupport = true
 
     // Object focus
     /** Fuse only the locked subject; everything else in view is ignored. */

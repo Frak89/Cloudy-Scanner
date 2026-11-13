@@ -15,6 +15,17 @@ Ogni push fa partire la build su GitHub Actions. L'APK firmato è:
 
 Serve *Google Play Services per AR* (ARCore): se manca, l'app propone di installarlo.
 
+## Cattura oggetto (un tasto, v1.7)
+
+Tocca **◎ Cattura oggetto** e inquadra l'oggetto al centro, a 25–40 cm. In un colpo solo l'app:
+- azzera la scansione, accende la fotocamera sullo sfondo e prende l'oggetto al centro dello schermo;
+- lo **stacca dal piano** su cui appoggia (scrivania, pavimento) e **esclude il resto della scena**;
+- lo scansiona a 5 mm, scatta le foto dalle viste che mancano, avvia l'IA live;
+- ogni 1,5 secondi ridisegna **sopra l'oggetto** il modello pulito (forma libera, tornito o estruso, nel colore
+  dominante), che si precisa da solo mentre giri intorno;
+- a **Fine cattura** rifà il modello in HIGH poly, chiede all'IA marca e modello, cerca foto di riferimento di quel
+  prodotto su Wikimedia Commons e salva tutto nella memoria degli oggetti; se il nome non è noto te lo chiede.
+
 ## Come funziona
 
 | Funzione | Come è fatta |

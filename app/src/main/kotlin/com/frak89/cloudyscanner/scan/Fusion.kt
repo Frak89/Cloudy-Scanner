@@ -62,6 +62,8 @@ class SubjectState {
     @Volatile var inside = false
     /** Largest extent seen so far, in metres (slowly forgets). */
     @Volatile var extent = 0f
+    /** Height of the desk / floor the subject stands on (cut away from it), NaN when none. */
+    @Volatile var supportY = Float.NaN
 }
 
 /**
@@ -345,35 +347,76 @@ class Fusion(private val map: PointMap) {
         val s3 = seed * 3
         val sx = camPts[s3]; val sy = camPts[s3 + 1]; val sz = camPts[s3 + 2]
         val rad2 = Opt.subjRadius * Opt.subjRadius
-        var qh = 0; var qt = 0
-        queue[qt++] = seed; mask[seed] = 1
         var cxw = 0f; var cyw = 0f; var czw = 0f; var cnt = 0
         val b = subject.bounds
         var x0 = Float.MAX_VALUE; var y0 = Float.MAX_VALUE; var z0 = Float.MAX_VALUE
         var x1 = -Float.MAX_VALUE; var y1 = -Float.MAX_VALUE; var z1 = -Float.MAX_VALUE
         var pu0 = w; var pv0 = h; var pu1 = 0; var pv1 = 0
-        while (qh < qt) {
-            val i = queue[qh++]
-            val o = i * 3
-            val pu = i % w; val pv = i / w
-            if (pu < pu0) pu0 = pu; if (pu > pu1) pu1 = pu; if (pv < pv0) pv0 = pv; if (pv > pv1) pv1 = pv
-            val wx = wldPts[o]; val wy = wldPts[o + 1]; val wz = wldPts[o + 2]
-            cxw += wx; cyw += wy; czw += wz; cnt++
-            if (wx < x0) x0 = wx; if (wy < y0) y0 = wy; if (wz < z0) z0 = wz
-            if (wx > x1) x1 = wx; if (wy > y1) y1 = wy; if (wz > z1) z1 = wz
-            val zc = -camPts[o + 2]
-            val tol = 0.03f * zc + 0.01f
-            val u = i % w; val v = i / w
-            for (k in 0 until 4) {
-                val nu = u + NB_U[k]; val nv = v + NB_V[k]
-                if (nu < 0 || nv < 0 || nu >= w || nv >= h) continue
-                val ni = nv * w + nu
-                if (mask[ni] != 0.toByte() || valid[ni] == 0.toByte()) continue
-                val no = ni * 3
-                if (abs(camPts[no + 2] - camPts[o + 2]) > tol) continue
-                val ex = camPts[no] - sx; val ey = camPts[no + 1] - sy; val ez = camPts[no + 2] - sz
-                if (ex * ex + ey * ey + ez * ez > rad2) continue
-                mask[ni] = 1; queue[qt++] = ni
+        // Region of continuous depth from the seed, optionally only above a height (the desk it stands on).
+        fun grow(minY: Float) {
+            java.util.Arrays.fill(mask, 0)
+            cxw = 0f; cyw = 0f; czw = 0f; cnt = 0
+            x0 = Float.MAX_VALUE; y0 = Float.MAX_VALUE; z0 = Float.MAX_VALUE; x1 = -Float.MAX_VALUE; y1 = -Float.MAX_VALUE; z1 = -Float.MAX_VALUE
+            pu0 = w; pv0 = h; pu1 = 0; pv1 = 0
+            var qh = 0; var qt = 0
+            queue[qt++] = seed; mask[seed] = 1
+            while (qh < qt) {
+                val i = queue[qh++]
+                val o = i * 3
+                val pu = i % w; val pv = i / w
+                if (pu < pu0) pu0 = pu; if (pu > pu1) pu1 = pu; if (pv < pv0) pv0 = pv; if (pv > pv1) pv1 = pv
+                val wx = wldPts[o]; val wy = wldPts[o + 1]; val wz = wldPts[o + 2]
+                cxw += wx; cyw += wy; czw += wz; cnt++
+                if (wx < x0) x0 = wx; if (wy < y0) y0 = wy; if (wz < z0) z0 = wz
+                if (wx > x1) x1 = wx; if (wy > y1) y1 = wy; if (wz > z1) z1 = wz
+                val zc = -camPts[o + 2]
+                val tol = 0.03f * zc + 0.01f
+                val u = i % w; val v = i / w
+                for (k in 0 until 4) {
+                    val nu = u + NB_U[k]; val nv = v + NB_V[k]
+                    if (nu < 0 || nv < 0 || nu >= w || nv >= h) continue
+                    val ni = nv * w + nu
+                    if (mask[ni] != 0.toByte() || valid[ni] == 0.toByte()) continue
+                    val no = ni * 3
+                    if (abs(camPts[no + 2] - camPts[o + 2]) > tol) continue
+                    if (wldPts[no + 1] < minY) continue
+                    val ex = camPts[no] - sx; val ey = camPts[no + 1] - sy; val ez = camPts[no + 2] - sz
+                    if (ex * ex + ey * ey + ez * ez > rad2) continue
+                    mask[ni] = 1; queue[qt++] = ni
+                }
+            }
+        }
+        grow(-Float.MAX_VALUE)
+        // An object on a desk is joined to the desk by continuous depth: find the desk (the most
+        // common height clearly below the seed) and grow again above it, so the object is just the object.
+        subject.supportY = Float.NaN
+        if (Opt.cutSupport && cnt > 60) {
+            val seedY = wldPts[s3 + 1]
+            val bins = IntArray(200)
+            var below = 0
+            for (i in 0 until w * h) {
+                if (mask[i] == 0.toByte()) continue
+                val dy = seedY - wldPts[i * 3 + 1]
+                if (dy < 0.012f || dy >= 2f) continue
+                bins[(dy / 0.01f).toInt()]++; below++
+            }
+            var mb = -1
+            for (k in bins.indices) if (mb < 0 || bins[k] > bins[mb]) mb = k
+            if (mb >= 0 && bins[mb] >= 40 && bins[mb] >= 0.15f * cnt) {
+                // refine the desk height from the pixels in that bin and its neighbours
+                var sum = 0.0; var n = 0
+                for (i in 0 until w * h) {
+                    if (mask[i] == 0.toByte()) continue
+                    val dy = seedY - wldPts[i * 3 + 1]
+                    if (dy >= (mb - 1) * 0.01f && dy < (mb + 2) * 0.01f) { sum += wldPts[i * 3 + 1]; n++ }
+                }
+                val desk = (sum / n).toFloat()
+                val zc = -camPts[s3 + 2]
+                val margin = 0.006f + 0.012f * zc
+                if (seedY > desk + margin) {
+                    grow(desk + margin)
+                    subject.supportY = desk
+                }
             }
         }
         val inv = 1f / cnt
@@ -409,8 +452,11 @@ class Fusion(private val map: PointMap) {
             subject.imgRect[0] = ix0.coerceIn(0, j.iw); subject.imgRect[1] = iy0.coerceIn(0, j.ih)
             subject.imgRect[2] = ix1.coerceIn(0, j.iw); subject.imgRect[3] = iy1.coerceIn(0, j.ih)
         }
+        // with the desk cut away the bottom of the object is the desk itself
+        if (!subject.supportY.isNaN()) { y0 = subject.supportY; b[1] = y0 }
         val ext = sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0) + (z1 - z0) * (z1 - z0))
-        subject.extent = max(ext, subject.extent * 0.995f)
+        // a sudden change of segmentation (desk cut or not) must not keep an old, larger size forever
+        subject.extent = if (ext < 0.5f * subject.extent) ext else max(ext, subject.extent * 0.995f)
         subject.valid = true
     }
 

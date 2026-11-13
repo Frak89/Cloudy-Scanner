@@ -363,6 +363,22 @@ class SceneTest {
             }
         }
     }
+
+    @Test fun capturedObjectAloneStandsOnTheDeskItWasCutFrom() {
+        // "Cattura oggetto": only the object is scanned, without its lowest centimetre (cut with the desk)
+        val all = Cloud(); all.noise = 0.004f; mouse(all, 0f, 0f, 0.3f)
+        val c = Cloud()
+        for (i in 0 until all.size) if (all.p[i * 3 + 1] > 0.01f) { for (k in 0..2) { c.p.add(all.p[i * 3 + k]); c.n.add(all.n[i * 3 + k]) }; c.c.add(all.c[i]) }
+        val cl = voxelize(c, 0.015f, floatArrayOf(0f, 0f, 0f))
+        val s = SmartModel.build(cl.size, cl.p.toFloatArray(), cl.n.toFloatArray(), cl.c.toIntArray(), null,
+            SmartOptions(1, 0, true, false, "", listOf(PartLabel(0f, 0.03f, 0f, "oggetto", 0.07f, 0f))))!!
+        show("captured alone", s)
+        val m = s.parts.single { it.name == "oggetto" }
+        val box = groupBox(s.mesh, m.group)
+        assertEquals("on the desk", 0f, box[1], 0.003f)
+        assertTrue("length ${m.length}", m.length in 0.09f..0.14f)
+        assertTrue("height ${box[4]}", box[4] in 0.025f..0.05f)
+    }
 }
 
 object Palette0 {

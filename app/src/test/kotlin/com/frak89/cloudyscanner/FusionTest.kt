@@ -46,6 +46,36 @@ private fun render(job: FrameJob, pose: FloatArray, c: FloatArray, R: Float, fra
 }
 
 class FusionTest {
+@Test fun smallObjectIsCutFromTheFloorAndScannedFine() {
+    val map = PointMap(0.015f)
+    val fusion = Fusion(map)
+    val job = FrameJob()
+    val rnd = java.util.Random(9)
+    // a ball of 4 cm radius resting on the floor (y = -1), seen from 35 cm
+    val C = floatArrayOf(0f, -0.96f, -0.5f); val R = 0.04f
+    Opt.maxRange = 5f; Opt.focusSubject = true; Opt.fineObject = true; Opt.cutSupport = true
+    fusion.lockAt(C[0], C[1] + R, C[2])
+    for (k in 0 until 60) {
+        val a = k * 2 * PI.toFloat() / 60
+        val eye = floatArrayOf(C[0] + 0.3f * sin(a), C[1] + 0.2f, C[2] + 0.3f * cos(a))
+        render(job, lookAtPose(eye, C), C, R, k + 1, rnd)
+        fusion.fuse(job)
+    }
+    Opt.focusSubject = false
+    val s = fusion.subject
+    var onBall = 0; var other = 0
+    for (i in 0 until map.size) {
+        val dx = map.pos[i * 3] - C[0]; val dy = map.pos[i * 3 + 1] - C[1]; val dz = map.pos[i * 3 + 2] - C[2]
+        if (abs(sqrt(dx * dx + dy * dy + dz * dz) - R) < 0.012f) onBall++ else other++
+    }
+    println("  small object: extent=%.3f support=%.3f ball=$onBall other=$other".format(s.extent, s.supportY))
+    assert(s.locked) { "still locked" }
+    assert(abs(s.supportY + 1f) < 0.02f) { "floor found under it: ${s.supportY}" }
+    assert(s.extent < 0.2f) { "the object alone, not the floor: ${s.extent}" }
+    assert(onBall > 150) { "fine points on a 4 cm ball: $onBall" }
+    assert(other < onBall) { "the rest of the scene is left out: $other" }
+}
+
 @Test fun orbitScanTracksSubjectAdaptsToMotionAndGuidesRescans() {
     val map = PointMap(0.015f)
     val fusion = Fusion(map)

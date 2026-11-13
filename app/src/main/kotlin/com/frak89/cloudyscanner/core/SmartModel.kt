@@ -14,7 +14,9 @@ import kotlin.math.sqrt
 /** "This thing here is a …": a name for whatever object sits at (x, y, z), from the AI or the user. */
 class PartLabel(val x: Float, val y: Float, val z: Float, val name: String,
                 /** Rough half size of the object when known (from the selection), else 0. */
-                val size: Float = 0f)
+                val size: Float = 0f,
+                /** Height of the desk it stands on when the scan knows it (cut away from the object), else NaN. */
+                val support: Float = Float.NaN)
 
 /** One object of the clean model, as listed in the catalogue and exported (one named object each). */
 class CatalogPart(
@@ -1031,8 +1033,15 @@ object SmartModel {
         return if (best > -Float.MAX_VALUE) best else low
     }
 
-    private fun blob(fit: FitResult, comp: IntArray, level: Int): Blob? =
-        if (comp.size < 150) null else blob(Pts(fit.px, fit.py, fit.pz, fit.col), comp, level, null, fit)
+    private fun blob(fit: FitResult, comp: IntArray, level: Int, labels: List<PartLabel> = emptyList()): Blob? {
+        if (comp.size < 150) return null
+        // a desk known from the selection (cut out of the scan) under these points
+        var mx = 0f; var mz = 0f
+        for (i in comp) { mx += fit.px[i]; mz += fit.pz[i] }
+        mx /= comp.size; mz /= comp.size
+        val sup = labels.firstOrNull { !it.support.isNaN() && (it.x - mx) * (it.x - mx) + (it.z - mz) * (it.z - mz) < (it.size + 0.05f) * (it.size + 0.05f) }?.support
+        return blob(Pts(fit.px, fit.py, fit.pz, fit.col), comp, level, sup, fit)
+    }
 
     /** Points to model from: either the fit's thinned set or the full scan. */
     private class Pts(val x: FloatArray, val y: FloatArray, val z: FloatArray, val c: IntArray)
@@ -1185,6 +1194,7 @@ object SmartModel {
                 sigma = max(0.002f, 1.48f * dev[dev.size / 2])
             }
         }
+        if (sup.isNaN() && !l.support.isNaN()) sup = l.support
         if (sup.isNaN()) {
             val inner = near.indices.filter { dist[it] <= R }.map { pos[near[it] * 3 + 1] }.sorted()
             if (inner.isEmpty()) return null
@@ -1554,6 +1564,12 @@ object SmartModel {
                 val under = if (p.disc) x * x + z * z < p.radius * p.radius else abs(x * p.u[0] + z * p.u[2]) < p.hu && abs(x * p.v[0] + z * p.v[2]) < p.hv
                 if (under) below = max(below, p.c[1])
             }
+            // the desk an object was cut from (known from the selection, not in the scan)
+            for (l in opt.labels) {
+                if (l.support.isNaN() || l.support > m[1]) continue
+                val dx = m[0] - l.x; val dz = m[2] - l.z
+                if (dx * dx + dz * dz < (l.size + 0.05f) * (l.size + 0.05f)) below = max(below, l.support)
+            }
             if (below == -Float.MAX_VALUE) continue
             val reach = a.rMax * sqrt(max(0f, 1f - a.d[1] * a.d[1]))
             if (m[1] - reach < below - 0.3f * a.rMax) {
@@ -1580,7 +1596,7 @@ object SmartModel {
             val ps = prisms(fit, comp, level)
             if (ps != null) { prismsAll.addAll(ps); for (i in comp) used[i] = true; continue }
             // no axis and no straight sides: a measured dome over its footprint
-            val bl = blob(fit, comp, level) ?: continue
+            val bl = blob(fit, comp, level, opt.labels) ?: continue
             blobs.add(bl)
             for (i in comp) used[i] = true
         }

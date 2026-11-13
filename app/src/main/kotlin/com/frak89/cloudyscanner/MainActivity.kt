@@ -113,6 +113,10 @@ class MainActivity : Activity(), Director.Ui {
     private val refreshers = ArrayList<() -> Unit>()
     private var arMessage: String? = "Avvio…"
     private var lastRealtimeNs = 0L
+    private lateinit var captureBtn: TextView
+    private var capturing = false
+    private var lastCaptureBuildNs = 0L
+    private var captureLastInfo = ""
     private var downloadId = -1L
     private var aiBusy = false
     private var d = 1f
@@ -307,6 +311,7 @@ class MainActivity : Activity(), Director.Ui {
 
         // Bottom bar
         val bar = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8f), 0, 0, 0) }
+        captureBtn = pill("◎  Cattura oggetto", ACCENT_DIM) { toggleCapture() }
         scanBtn = pill("●  Scan") { toggleScan() }
         viewBtn = pill("Vista: AR") { setOrbit(!Opt.orbit) }
         eraseBtn = pill("Cancella") { setErase(!Opt.eraseMode) }
@@ -315,6 +320,7 @@ class MainActivity : Activity(), Director.Ui {
         aiBtn = pill("IA") { toggle(aiPanel, optionsPanel) }
         optBtn = pill("Opzioni") { toggle(optionsPanel, aiPanel) }
         importBtn = pill("Foto → 3D") { importPhotos() }
+        bar.addView(captureBtn)
         bar.addView(scanBtn)
         bar.addView(viewBtn)
         bar.addView(objBtn)
@@ -469,9 +475,11 @@ class MainActivity : Activity(), Director.Ui {
             refreshers.forEach { it() }
             viewBtn.text = if (Opt.orbit) "Vista: Orbita" else "Vista: AR"
             scanBtn.text = if (engine.scanning) "■  Stop" else "●  Scan"
+            captureBtn.text = if (capturing) "■  Fine cattura" else "◎  Cattura oggetto"
             // Every button that is switched on, or whose panel is open, gets the highlight colour.
             fun mark(b: TextView, on: Boolean, onColor: Int = ACTIVE) { b.background = rounded(if (on) onColor else BTN, 22f); b.setTextColor(if (on && onColor == ACTIVE) 0xFF10131A.toInt() else TEXT) }
             mark(scanBtn, engine.scanning, REC)
+            captureBtn.background = rounded(if (capturing) REC else ACCENT_DIM, 22f)
             mark(viewBtn, Opt.orbit)
             mark(objBtn, Opt.focusSubject || Opt.palette256)
             mark(meshBtn, Opt.realtimeMesh || meshes.mesh != null)
@@ -1013,7 +1021,7 @@ class MainActivity : Activity(), Director.Ui {
     /** Names the object nearest to a point (replacing an older name at the same spot) and rebuilds the clean model. */
     private fun putLabel(x: Float, y: Float, z: Float, name: String, rebuild: Boolean = false, size: Float = 0f) {
         val keep = Opt.labels.filter { val dx = it.x - x; val dy = it.y - y; val dz = it.z - z; dx * dx + dy * dy + dz * dz > 0.05f * 0.05f }
-        Opt.labels = keep + PartLabel(x, y, z, name, size)
+        Opt.labels = keep + PartLabel(x, y, z, name, size, engine.subject.supportY)
         if (rebuild) rebuildIfShown()
     }
 
@@ -1115,6 +1123,132 @@ class MainActivity : Activity(), Director.Ui {
                 if (named > 0) { say("Rifaccio il modello pulito con $named oggetti riconosciuti (forme tipiche: piatti cavi, candele, barattoli…)."); ui.post { rebuildIfShown() } }
             } catch (t: Throwable) { stream(null); say("Riconoscimento non riuscito: ${t.message ?: t.javaClass.simpleName}") }
             finally { finished() }
+        }
+    }
+
+    // ------------------------------------------------------------------ one-tap object capture
+
+    private fun toggleCapture() { if (capturing) finishCapture() else startCapture() }
+
+    /**
+     * Everything in one go: fresh scan, the object at the centre selected and cut from its desk,
+     * only it scanned (5 mm), photos, live AI, and the clean model redrawn over the camera every
+     * second and a half as the shape fills in.
+     */
+    private fun startCapture() {
+        if (director.running || recon.running) { toast("Prima termina l'operazione in corso"); return }
+        if (arMessage != null) { arMessage = engine.resume(); if (arMessage != null) { toast(arMessage!!); return } }
+        if (Opt.eraseMode) setErase(false)
+        engine.scanning = false
+        engine.reset(); meshes.clear(); photos.clear(); live.reset(); updateEraseCount()
+        engine.unlockSubject()
+        Opt.labels = emptyList(); Opt.objectHint = ""; hud.objLabel = ""
+        Opt.showCamera = true; setOrbit(false)
+        Opt.smart = true; Opt.keepDetails = false; Opt.fineObject = true; Opt.cutSupport = true; Opt.photoAuto = true
+        Opt.showPoints = true; Opt.showWire = true; Opt.showSolid = true
+        Opt.focusSubject = false
+        capturing = true; lastCaptureBuildNs = 0L; captureLastInfo = ""
+        engine.scanning = true
+        aiPanel.visibility = View.VISIBLE; optionsPanel.visibility = View.GONE
+        aiLog.text = "CATTURA OGGETTO\nInquadra l'oggetto al centro dello schermo, a 25–40 cm. Appena lo prendo, giragli intorno lentamente " +
+            "(anche un po' dall'alto): il modello si disegna sopra l'oggetto e si precisa da solo. Tocca «Fine cattura» quando ti piace."
+        if (!Opt.aiLive && (ai.state == LocalAi.State.READY || ai.autoSelect())) toggleLive()
+        refreshControls()
+    }
+
+    private fun captureStep(now: Long) {
+        if (!capturing) return
+        val s = engine.subject
+        if (!s.locked) {
+            // take whatever is at the centre of the view, as soon as there is depth there
+            if (engine.lockSubjectAt(glView.width / 2f, glView.height / 2f)) {
+                onSubjectLocked()
+                Opt.focusSubject = true
+                say("Preso" + (if (!s.supportY.isNaN()) ", staccato dal piano su cui appoggia" else "") + ". Ora giragli intorno lentamente.")
+            }
+            return
+        }
+        Opt.focusSubject = true
+        if (s.valid) {
+            // one name on the object, always: what the AI or the user said, else just "oggetto"
+            val name = Opt.objectHint.ifBlank { "oggetto" }.lowercase(Locale.ITALIAN)
+            Opt.labels = listOf(PartLabel(s.x, s.y, s.z, name, s.extent / 2, s.supportY))
+        }
+        if (meshes.busy || map.version == meshes.builtVersion || now - lastCaptureBuildNs < 1_500_000_000L) return
+        if (map.countFlag(PointMap.SUBJECT) < 40) return
+        lastCaptureBuildNs = now
+        // mid poly while scanning (fast); high poly at the end
+        meshes.request(1, 0, 0, 0f) { ui.post { captureProgress() } }
+    }
+
+    private fun captureProgress() {
+        if (!capturing) return
+        val p = meshes.catalog.firstOrNull { it.labelled } ?: meshes.catalog.firstOrNull { it.kind != "face" && it.kind != "detail" } ?: return
+        val pts = map.countFlag(PointMap.SUBJECT)
+        val info = "${p.name} · ${p.dims} · ${fmt(pts)} punti"
+        hud.objLabel = info
+        aiStatus.text = "Cattura: $info"
+        if (captureLastInfo.isEmpty()) say("Prima stesura: $info. Continua a girare: si precisa da sola.")
+        captureLastInfo = info
+    }
+
+    private fun finishCapture() {
+        capturing = false
+        engine.scanning = false
+        if (Opt.aiLive) toggleLive()
+        refreshControls()
+        val pts = map.countFlag(PointMap.SUBJECT)
+        if (pts < 40) { say("Non ho preso abbastanza punti dell'oggetto ($pts). Riprova più vicino (25–40 cm), con più luce."); Opt.focusSubject = false; return }
+        say("Fine cattura: rifaccio il modello in HIGH poly con ${fmt(pts)} punti.")
+        rebuild(2)
+        val name = Opt.objectHint
+        thread(name = "capture-end") {
+            val crop = grabCamera(true)
+            val dims = subjectDims(); val colr = subjectColor()
+            if (name.isNotBlank()) memory.remember(name, dims, colr, crop)
+            identifyProduct(crop, name)
+            ui.post {
+                Opt.focusSubject = false
+                if (name.isBlank()) { say("Non so ancora che cos'è: dimmelo tu (si apre la richiesta) e lo ricorderò."); nameSubject() }
+                else say("Fatto. Mesh ▾ → Catalogo oggetti per le misure, Mesh ▾ → Esporta OBJ per Blender.")
+            }
+        }
+    }
+
+    /**
+     * Asks the AI for brand and model (when it can read them) and fetches reference photos of
+     * that exact product, stored with the object in memory.
+     */
+    private fun identifyProduct(crop: ByteArray?, name: String) {
+        var query = ""; var label = name
+        if (crop != null && !aiBusy && (ai.state == LocalAi.State.READY || ai.autoSelect())) {
+            aiBusy = true
+            try {
+                if (ai.ensureLoaded()) {
+                    val p = "L'immagine mostra un oggetto appena scansionato" + (if (name.isNotBlank()) " (riconosciuto come «$name»)" else "") + ".\n" +
+                        "Rispondi con le righe:\nOGGETTO: <nome breve>\nSICUREZZA: <0-100>\nMARCA: <marca o sconosciuta>\nMODELLO: <modello o sconosciuto>"
+                    val text = ai.generate(SYSTEM_OBJECT, p, listOf(crop), 120) { stream(it) }
+                    stream(null)
+                    fun f(k: String) = Regex("^\\W*$k\\s*:\\s*(.+)$", setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE)).find(text)?.groupValues?.get(1)?.trim()?.trim('*', '.', ' ') ?: ""
+                    val brand = f("MARCA"); val model = f("MODELLO")
+                    if (label.isBlank()) { val r = VisionParse.parse(text); if (r.known && r.confidence >= 50) { label = r.name.lowercase(Locale.ITALIAN); ui.post { onRecognition(r, 0f) } } }
+                    val known = { x: String -> x.isNotBlank() && !x.lowercase().startsWith("sconosciut") && !x.lowercase().startsWith("unknown") }
+                    if (known(brand) || known(model)) {
+                        query = listOf(brand, model).filter(known).joinToString(" ")
+                        say("IA: sembra ${listOf(brand, model).filter(known).joinToString(" ")}.")
+                        if (label.isNotBlank()) kb.addNote("«$label» scansionato: ${query}.")
+                    }
+                }
+            } catch (t: Throwable) { stream(null) } finally { finished() }
+        }
+        if (!Opt.webRefs || label.isBlank()) return
+        val q = if (query.isNotBlank()) "$query ${englishQuery(label)}" else englishQuery(label)
+        var refs = WebRefs.search(q, 3)
+        if (refs.isEmpty() && query.isNotBlank()) refs = WebRefs.search(englishQuery(label), 3)
+        if (refs.isNotEmpty()) {
+            memory.remember(label, null, null, null)
+            memory.addRefs(label, refs)
+            say("Ho trovato ${refs.size} immagini di riferimento per «$q» (Wikimedia Commons) e le ho salvate con l'oggetto.")
         }
     }
 
@@ -1433,7 +1567,8 @@ class MainActivity : Activity(), Director.Ui {
                 } finally { map.lock.unlock() }
             }
             if (Opt.palette256 && engine.scanning && kotlin.math.abs(map.size - lastPaletteSize) > lastPaletteSize / 5 + 500) { lastPaletteSize = map.size; rebuildPalette() }
-            if (Opt.realtimeMesh && (engine.scanning || recon.running) && !meshes.busy && map.version != meshes.builtVersion && now - lastRealtimeNs > 900_000_000L && hud.points > 300) {
+            captureStep(now)
+            if (!capturing && Opt.realtimeMesh && (engine.scanning || recon.running) && !meshes.busy && map.version != meshes.builtVersion && now - lastRealtimeNs > 900_000_000L && hud.points > 300) {
                 lastRealtimeNs = now
                 meshes.request(Opt.meshLevel, 0, 0, 0f)
             }
